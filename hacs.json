@@ -1,5 +1,7 @@
 {
   "name": "Raven House Cards",
+  "content_in_root": true,
+  "filename": "ha-raven-house-cards.js",
   "render_readme": true,
   "homeassistant": "2026.3.1",
   "version": "2026.3.8"
