@@ -1,0 +1,159 @@
+name: Release (Auto Version + Tag + Notes)
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "*.js"
+      - "examples/**"
+      - "hacs.json"
+      - "README.md"
+      - ".github/workflows/release.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Decide bump type from commit message
+        id: bump_type
+        shell: bash
+        run: |
+          set -euo pipefail
+          MSG="${{ github.event.head_commit.message }}"
+          TYPE="patch"
+          shopt -s nocasematch
+          if [[ "$MSG" == *"#major"* ]]; then
+            TYPE="major"
+          elif [[ "$MSG" == *"#minor"* ]]; then
+            TYPE="minor"
+          fi
+          shopt -u nocasematch
+          echo "type=$TYPE" > "$GITHUB_OUTPUT"
+
+      - name: Compute next version
+        id: semver
+        shell: bash
+        run: |
+          set -euo pipefail
+          TYPE="${{ steps.bump_type.outputs.type }}"
+
+          if [ ! -f "hacs.json" ]; then
+            echo "hacs.json not found"
+            exit 1
+          fi
+
+          CURRENT=$(jq -r '.version // empty' hacs.json)
+          LATEST_TAG=$(git tag --list 'v*' --sort=-v:refname | head -n 1)
+          RELEASE_VERSION="${LATEST_TAG#v}"
+
+          if [ -n "$CURRENT" ] && ! [[ "$CURRENT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Current hacs.json version '$CURRENT' is not semver (x.y.z)."
+            exit 1
+          fi
+
+          if [ -n "$LATEST_TAG" ] && ! [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Latest release tag '$LATEST_TAG' is not semver (vX.Y.Z)."
+            exit 1
+          fi
+
+          BASE_VERSION="$CURRENT"
+          if [ -n "$RELEASE_VERSION" ] && [ "$RELEASE_VERSION" != "$CURRENT" ]; then
+            echo "Using latest release version $RELEASE_VERSION instead of hacs.json version '${CURRENT:-<empty>}'"
+            BASE_VERSION="$RELEASE_VERSION"
+          fi
+
+          if [ -z "$BASE_VERSION" ]; then
+            BASE_VERSION="0.0.0"
+          fi
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+
+          case "$TYPE" in
+            major)
+              MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1)); PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+            *)
+              echo "Invalid bump type: $TYPE"
+              exit 1
+              ;;
+          esac
+
+          NEXT="${MAJOR}.${MINOR}.${PATCH}"
+          TAG="v${NEXT}"
+
+          echo "current=$BASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure tag does not already exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.semver.outputs.tag }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists. Nothing to do."
+            exit 1
+          fi
+
+      - name: Update hacs.json version
+        shell: bash
+        run: |
+          set -euo pipefail
+          NEXT="${{ steps.semver.outputs.next }}"
+          tmp=$(mktemp)
+          jq --arg v "$NEXT" '.version = $v' hacs.json > "$tmp"
+          mv "$tmp" hacs.json
+
+      - name: Commit version bump
+        shell: bash
+        run: |
+          set -euo pipefail
+          NEXT="${{ steps.semver.outputs.next }}"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "chore(release): v${NEXT} [skip ci]"
+          git push
+
+      - name: Create and push tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.semver.outputs.tag }}"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: Create GitHub Release (auto notes)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.semver.outputs.tag }}
+          name: ${{ steps.semver.outputs.tag }}
+          generate_release_notes: true
