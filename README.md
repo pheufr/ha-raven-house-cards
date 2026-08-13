@@ -24,7 +24,7 @@ These cards consume entities/services provided by the backend integration reposi
 
 Add the resources you use from `/hacsfiles/ha-raven-house-cards/`.
 
-Recommended single resource (loads all Raven House cards):
+Recommended standard HACS resource (loads all Raven House cards from the bundled entry file):
 
 ```yaml
 resources:
@@ -32,7 +32,9 @@ resources:
     type: module
 ```
 
-Example resource entries:
+The individual `rh-*-card.js` files are kept in the repository for direct/manual installs, but a standard HACS install should use the bundled `ha-raven-house-cards.js` resource above.
+
+Example resource entries for manual installs:
 
 ```yaml
 resources:
