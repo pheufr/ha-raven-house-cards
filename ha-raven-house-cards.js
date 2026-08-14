@@ -302,6 +302,7 @@
       this._config = {
         ...safeConfig,
         entity_id: entityId,
+        edit_on_click: safeConfig.edit_on_click !== false,
         fg_color: typeof safeConfig.fg_color === "string" ? safeConfig.fg_color : typeof safeConfig.foreground_color === "string" ? safeConfig.foreground_color : ""
       };
     }
@@ -351,6 +352,9 @@
     }
     _fgColor() {
       return this._config?.fg_color || "var(--primary-text-color)";
+    }
+    _isEditOnClickEnabled() {
+      return this._config?.edit_on_click !== false;
     }
     _textValue() {
       const value = this._entityState()?.state;
@@ -414,16 +418,34 @@
       text.style.fontSize = `${best}px`;
       text.style.opacity = "1";
     }
+    _openEntityEditor() {
+      const entityId = this._entityId();
+      if (!entityId) {
+        return;
+      }
+      const event = new Event("hass-more-info", { bubbles: true, composed: true });
+      event.detail = { entityId };
+      this.dispatchEvent(event);
+    }
+    _handleStageKeydown(event) {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      event.preventDefault();
+      this._openEntityEditor();
+    }
     _render() {
       if (!this._hass || !this._config) {
         return;
       }
       const fgColor = this._fgColor();
       const noteText = this._textValue();
+      const editOnClick = this._isEditOnClickEnabled();
+      const stageCursor = editOnClick ? "cursor:pointer;" : "";
       this.innerHTML = `
       <ha-card${this._renderHeader()} style="background:transparent;box-shadow:none;border:none;color:${fgColor};--paper-card-header-color:${fgColor};--paper-card-header-text-color:${fgColor};">
         <div style="padding:16px;min-height:220px;box-sizing:border-box;display:flex;align-items:stretch;justify-content:stretch;">
-          <div data-role="note-stage" style="position:relative;flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;">
+          <div data-role="note-stage" style="position:relative;flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;${stageCursor}">
             <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;transform:rotate(-5deg) skew(-2deg, 0deg);transform-origin:center;">
               <div data-role="note-text" style="max-width:100%;max-height:100%;width:100%;display:flex;align-items:center;justify-content:center;text-align:center;white-space:normal;overflow-wrap:anywhere;word-break:break-word;line-height:0.95;font-family:'Segoe Print','Bradley Hand','Comic Sans MS','Chalkboard SE',cursive;font-weight:700;letter-spacing:0.01em;color:${fgColor};opacity:0;">
                 ${noteText}
@@ -433,6 +455,14 @@
         </div>
       </ha-card>
     `;
+      const stage = this.querySelector('[data-role="note-stage"]');
+      if (stage && editOnClick) {
+        stage.setAttribute("tabindex", "0");
+        stage.setAttribute("role", "button");
+        stage.setAttribute("aria-label", "Edit note");
+        stage.addEventListener("click", () => this._openEntityEditor());
+        stage.addEventListener("keydown", (event) => this._handleStageKeydown(event));
+      }
       this._scheduleFit();
     }
     getCardSize() {
