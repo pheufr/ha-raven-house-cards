@@ -19,7 +19,8 @@ class RHQuizRoundCard extends HTMLElement {
   _buildRenderKey() {
     const rounds = this._rounds();
     const active = this._activeRoundIndex();
-    return `${active ?? "null"}|${rounds.join(",")}`;
+    const position = this._roundPositionIndex();
+    return `${active ?? "null"}|${position ?? "null"}|${rounds.join(",")}`;
   }
 
   connectedCallback() {
@@ -46,6 +47,19 @@ class RHQuizRoundCard extends HTMLElement {
     return title === "" ? "" : ` header="${title}"`;
   }
 
+  _textScale() {
+    const configured = Number(this._config.text_size);
+    if (!Number.isFinite(configured) || configured <= 0) {
+      return 1;
+    }
+    return Math.max(0.6, Math.min(3, configured));
+  }
+
+  _scaledPx(basePx, minimumPx = 10) {
+    const scaled = Math.round(basePx * this._textScale());
+    return `${Math.max(minimumPx, scaled)}px`;
+  }
+
   _roundState() {
     return this._hass?.states?.["sensor.rh_quiz_rounds"] || null;
   }
@@ -60,6 +74,11 @@ class RHQuizRoundCard extends HTMLElement {
     return Number.isInteger(value) ? value : null;
   }
 
+  _roundPositionIndex() {
+    const value = this._roundState()?.attributes?.round_position_index;
+    return Number.isInteger(value) ? value : null;
+  }
+
   _buttonStyle(primary = false) {
     return [
       "appearance:none",
@@ -69,6 +88,7 @@ class RHQuizRoundCard extends HTMLElement {
       `color:${primary ? "var(--text-primary-color, #fff)" : "var(--primary-text-color)"}`,
       `padding:${primary ? "10px 16px" : "8px 10px"}`,
       "font:inherit",
+      `font-size:${this._scaledPx(14, 10)}`,
       "font-weight:600",
       "cursor:pointer",
       "min-height:40px",
@@ -77,10 +97,11 @@ class RHQuizRoundCard extends HTMLElement {
     ].join(";");
   }
 
-  async _saveRounds(rounds, activeRoundIndex) {
+  async _saveRounds(rounds, activeRoundIndex, roundPositionIndex) {
     await this._hass.callService("raven_house_tools", "set_quiz_rounds", {
       rounds,
       active_round_index: activeRoundIndex,
+      round_position_index: roundPositionIndex,
     });
   }
 
@@ -88,6 +109,7 @@ class RHQuizRoundCard extends HTMLElement {
   async _handleAction(action, index) {
     const rounds = this._rounds();
     const activeRoundIndex = this._activeRoundIndex();
+    const roundPositionIndex = this._roundPositionIndex();
     if (!Number.isInteger(index) || index < 0 || index >= rounds.length) {
       return;
     }
@@ -95,14 +117,22 @@ class RHQuizRoundCard extends HTMLElement {
     if (action === "delete") {
       const nextRounds = rounds.filter((_, itemIndex) => itemIndex !== index);
       let nextActive = activeRoundIndex;
+      let nextPosition = roundPositionIndex;
       if (activeRoundIndex === index) nextActive = null;
       else if (activeRoundIndex !== null && activeRoundIndex > index) nextActive = activeRoundIndex - 1;
-      await this._saveRounds(nextRounds, nextActive);
+      if (roundPositionIndex === index) nextPosition = null;
+      else if (roundPositionIndex !== null && roundPositionIndex > index) nextPosition = roundPositionIndex - 1;
+      await this._saveRounds(nextRounds, nextActive, nextPosition);
       return;
     }
 
     if (action === "activate") {
-      await this._saveRounds(rounds, activeRoundIndex === index ? null : index);
+      await this._saveRounds(rounds, activeRoundIndex === index ? null : index, index);
+      return;
+    }
+
+    if (action === "position") {
+      await this._saveRounds(rounds, activeRoundIndex, roundPositionIndex === index ? null : index);
       return;
     }
 
@@ -112,9 +142,12 @@ class RHQuizRoundCard extends HTMLElement {
       const nextRounds = [...rounds];
       [nextRounds[index], nextRounds[targetIndex]] = [nextRounds[targetIndex], nextRounds[index]];
       let nextActive = activeRoundIndex;
+      let nextPosition = roundPositionIndex;
       if (activeRoundIndex === index) nextActive = targetIndex;
       else if (activeRoundIndex === targetIndex) nextActive = index;
-      await this._saveRounds(nextRounds, nextActive);
+      if (roundPositionIndex === index) nextPosition = targetIndex;
+      else if (roundPositionIndex === targetIndex) nextPosition = index;
+      await this._saveRounds(nextRounds, nextActive, nextPosition);
     }
   }
 
@@ -122,12 +155,13 @@ class RHQuizRoundCard extends HTMLElement {
     if (!this._hass) return;
     const rounds = this._rounds();
     const activeRoundIndex = this._activeRoundIndex();
+    const roundPositionIndex = this._roundPositionIndex();
 
     this.innerHTML = `
       <ha-card${this._renderHeader()}>
         <div style="padding:16px;display:grid;gap:14px;">
           <div style="display:flex;gap:10px;align-items:center;">
-            <input data-role="round-input" type="text" placeholder="Add round name" style="flex:1;min-width:0;border:1px solid var(--divider-color);border-radius:12px;padding:10px 12px;background:var(--card-background-color);color:var(--primary-text-color);font:inherit;" />
+            <input data-role="round-input" type="text" placeholder="Add round name" style="flex:1;min-width:0;border:1px solid var(--divider-color);border-radius:12px;padding:10px 12px;background:var(--card-background-color);color:var(--primary-text-color);font:inherit;font-size:${this._scaledPx(14, 10)};" />
             <button data-action="add" style="${this._buttonStyle(true)};flex:0 0 auto;min-width:92px;">Add</button>
           </div>
           <div style="display:grid;gap:10px;">
@@ -135,19 +169,23 @@ class RHQuizRoundCard extends HTMLElement {
               <div style="padding:12px;border-radius:14px;background:var(--secondary-background-color);display:grid;gap:10px;">
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
                   <div style="min-width:0;display:flex;gap:10px;align-items:center;">
-                    <div style="font-weight:700;opacity:0.7;min-width:20px;">${index + 1}.</div>
-                    <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${round}</div>
+                    <div style="font-weight:700;font-size:${this._scaledPx(13, 10)};opacity:0.7;min-width:20px;">${index + 1}.</div>
+                    <div style="font-weight:600;font-size:${this._scaledPx(15, 11)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${round}</div>
                   </div>
-                  ${activeRoundIndex === index ? '<div style="font-size:12px;font-weight:700;color:var(--primary-color);">Active</div>' : ''}
+                  <div style="display:flex;gap:8px;align-items:center;">
+                    ${roundPositionIndex === index ? `<div style="font-size:${this._scaledPx(12, 10)};font-weight:700;opacity:0.75;">Position</div>` : ""}
+                    ${activeRoundIndex === index ? `<div style="font-size:${this._scaledPx(12, 10)};font-weight:700;color:var(--primary-color);">Active</div>` : ""}
+                  </div>
                 </div>
                 <div style="display:flex;gap:8px;flex-wrap:wrap;">
                   <button data-action="activate" data-index="${index}" style="${this._buttonStyle(activeRoundIndex === index)};">${activeRoundIndex === index ? 'Clear Active' : 'Set Active'}</button>
+                  <button data-action="position" data-index="${index}" style="${this._buttonStyle(roundPositionIndex === index && activeRoundIndex !== index)};">${roundPositionIndex === index ? 'Clear Position' : 'Set Position'}</button>
                   <button data-action="move-up" data-index="${index}" style="${this._buttonStyle()};" ${index === 0 ? 'disabled' : ''}>Up</button>
                   <button data-action="move-down" data-index="${index}" style="${this._buttonStyle()};" ${index === rounds.length - 1 ? 'disabled' : ''}>Down</button>
                   <button data-action="delete" data-index="${index}" style="${this._buttonStyle()};">Delete</button>
                 </div>
               </div>
-            `).join("") || '<div style="padding:12px 0;opacity:0.7;">No quiz rounds yet</div>'}
+            `).join("") || `<div style="padding:12px 0;opacity:0.7;font-size:${this._scaledPx(14, 10)};">No quiz rounds yet</div>`}
           </div>
         </div>
       </ha-card>
@@ -160,7 +198,7 @@ class RHQuizRoundCard extends HTMLElement {
     const name = input.value.trim();
     if (!name) return;
     const rounds = this._rounds();
-    await this._saveRounds([...rounds, name], this._activeRoundIndex());
+    await this._saveRounds([...rounds, name], this._activeRoundIndex(), this._roundPositionIndex());
     input.value = "";
   }
 
@@ -200,3 +238,6 @@ if (!window.customCards.find((card) => card.type === "rh-quiz-round-card")) {
     description: "Manage quiz round names and the active round",
   });
 }
+
+
+

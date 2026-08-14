@@ -27,6 +27,19 @@ class RHQuizMasterCard extends HTMLElement {
     return title === "" ? "" : ` header="${title}"`;
   }
 
+  _textScale() {
+    const configured = Number(this._config.text_size);
+    if (!Number.isFinite(configured) || configured <= 0) {
+      return 1;
+    }
+    return Math.max(0.6, Math.min(3, configured));
+  }
+
+  _scaledPx(basePx, minimumPx = 10) {
+    const scaled = Math.round(basePx * this._textScale());
+    return `${Math.max(minimumPx, scaled)}px`;
+  }
+
   connectedCallback() {
     this.addEventListener("click", (e) => this._handleClick(e));
   }
@@ -34,8 +47,13 @@ class RHQuizMasterCard extends HTMLElement {
   _buildRenderKey() {
     if (!this._hass) return "";
     const players = this._players();
+    const roundState = this._hass.states["sensor.rh_quiz_rounds"] || null;
+    const roundKey = roundState
+      ? `${roundState.attributes?.active_round_index ?? ""}:${roundState.attributes?.round_position_index ?? ""}`
+      : "";
     return [
       this._confirmNewQuiz ? "confirm" : "normal",
+      roundKey,
       players.map((p) => `${p.entityId}:${p.total}:${p.round}:${p.enabled ? 1 : 0}`).join("|"),
     ].join("~");
   }
@@ -77,6 +95,11 @@ class RHQuizMasterCard extends HTMLElement {
 
   _call(service, data = {}) {
     return this._hass.callService("raven_house_tools", service, data);
+  }
+
+  _hasActiveRound() {
+    const value = this._hass.states["sensor.rh_quiz_rounds"]?.attributes?.active_round_index;
+    return Number.isInteger(value);
   }
 
   _renderPhoto(photo, name, size = 24) {
@@ -159,6 +182,7 @@ class RHQuizMasterCard extends HTMLElement {
       `color:${primary ? "var(--text-primary-color, #fff)" : "var(--primary-text-color)"}`,
       `padding:${compact ? "5px 8px" : "10px 12px"}`,
       "font:inherit",
+      `font-size:${this._scaledPx(compact ? 12 : 14, 10)}`,
       "font-weight:700",
       "cursor:pointer",
       `min-height:${compact ? "30px" : "40px"}`,
@@ -181,17 +205,17 @@ class RHQuizMasterCard extends HTMLElement {
     const nameBlock = compact
       ? `<div style="min-width:0;">
            <div style="display:flex;gap:6px;align-items:baseline;flex-wrap:wrap;">
-             <div style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${player.alias || "No alias"}</div>
-             <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0.75;">${player.name}</div>
-             <div style="opacity:0.65;font-size:10px;white-space:nowrap;">· Total: <strong>${player.total}</strong></div>
+             <div style="font-weight:700;font-size:${this._scaledPx(14, 11)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${player.alias || "No alias"}</div>
+             <div style="font-size:${this._scaledPx(13, 10)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0.75;">${player.name}</div>
+             <div style="opacity:0.65;font-size:${this._scaledPx(10, 9)};white-space:nowrap;">· Total: <strong>${player.total}</strong></div>
            </div>
          </div>`
       : `<div style="min-width:0;">
            <div style="display:flex;gap:6px;align-items:baseline;flex-wrap:wrap;">
-             <div style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${player.alias || "No alias"}</div>
-             <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${player.name}</div>
+             <div style="font-weight:700;font-size:${this._scaledPx(15, 11)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${player.alias || "No alias"}</div>
+             <div style="font-size:${this._scaledPx(14, 10)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${player.name}</div>
            </div>
-           <div style="font-size:12px;opacity:0.75;">Total Points: <strong>${player.total}</strong></div>
+           <div style="font-size:${this._scaledPx(12, 10)};opacity:0.75;">Total Points: <strong>${player.total}</strong></div>
          </div>`;
 
     const photoSize = compact ? 18 : 24;
@@ -203,7 +227,7 @@ class RHQuizMasterCard extends HTMLElement {
             ${this._renderPhoto(player.photo, player.name, photoSize)}
             ${nameBlock}
           </div>
-          <div style="font-size:${compact ? "18px" : "24px"};font-weight:800;line-height:1;">${player.round >= 0 ? "+" : ""}${player.round}</div>
+          <div style="font-size:${this._scaledPx(compact ? 18 : 24, 12)};font-weight:800;line-height:1;">${player.round >= 0 ? "+" : ""}${player.round}</div>
         </div>
         <div style="display:flex;gap:${compact ? "4px" : "6px"};flex-wrap:wrap;">
           ${actionButtons}
@@ -216,7 +240,7 @@ class RHQuizMasterCard extends HTMLElement {
   _renderNewQuizConfirm() {
     return `
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:10px 12px;border-radius:12px;background:rgba(var(--rgb-red-color,255,0,0),0.12);margin-bottom:10px;">
-        <span style="flex:1;font-weight:600;font-size:13px;">Reset all scores and start a new quiz?</span>
+        <span style="flex:1;font-weight:600;font-size:${this._scaledPx(13, 10)};">Reset all scores and start a new quiz?</span>
         <button data-action="new-quiz-confirm" style="${this._buttonStyle(true)}">Confirm</button>
         <button data-action="new-quiz-cancel" style="${this._buttonStyle()}">Cancel</button>
       </div>
@@ -227,16 +251,19 @@ class RHQuizMasterCard extends HTMLElement {
     if (!this._hass) return;
     const compact = Boolean(this._config.compact);
     const players = this._players();
+    const hasActiveRound = this._hasActiveRound();
+    const roundAction = hasActiveRound ? "end-round" : "start-round";
+    const roundActionLabel = hasActiveRound ? "End Round" : "Start Round";
 
     this.innerHTML = `
       <ha-card${this._renderHeader()}>
         <div style="padding:12px;">
           ${this._confirmNewQuiz ? this._renderNewQuizConfirm() : `
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
-            <button data-action="new-round" style="${this._buttonStyle()}">New Round</button>
+            <button data-action="${roundAction}" style="${this._buttonStyle()}">${roundActionLabel}</button>
             <button data-action="new-quiz" style="${this._buttonStyle(true)}">Start New Quiz</button>
           </div>`}
-          <div style="font-size:${compact ? "12px" : "14px"};">
+          <div style="font-size:${this._scaledPx(compact ? 12 : 14, 10)};">
             ${players.map((player, index) => `${this._row(player, compact)}${index < players.length - 1 ? '<hr style="border:none;border-top:1px solid rgba(128,128,128,0.25);margin:0;">' : ""}`).join("") || '<div>No players</div>'}
           </div>
         </div>
@@ -250,8 +277,13 @@ class RHQuizMasterCard extends HTMLElement {
     const action = button.dataset.action;
     const entityId = button.dataset.entity;
 
-    if (action === "new-round") {
-      this._call("start_new_round");
+    if (action === "end-round") {
+      this._call("end_round");
+      return;
+    }
+
+    if (action === "start-round") {
+      this._call("start_round");
       return;
     }
 
@@ -304,3 +336,6 @@ if (!window.customCards.find((card) => card.type === "rh-quiz-master-card")) {
     description: "Master control panel for Raven House Quiz",
   });
 }
+
+
+

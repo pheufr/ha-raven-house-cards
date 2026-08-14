@@ -16,7 +16,7 @@ class RHQuizCard extends HTMLElement {
     const players = this._players();
     const roundState = this._hass.states["sensor.rh_quiz_rounds"] || null;
     const roundKey = roundState
-      ? `${roundState.state}:${roundState.attributes?.active_round_index ?? ""}:${roundState.attributes?.active_round_name ?? ""}`
+      ? `${roundState.state}:${roundState.attributes?.active_round_index ?? ""}:${roundState.attributes?.active_round_name ?? ""}:${roundState.attributes?.round_position_index ?? ""}`
       : "";
     return [
       roundKey,
@@ -185,12 +185,33 @@ class RHQuizCard extends HTMLElement {
     return `<img src="${resolvedPhoto}" alt="${label}" style="width:${size}px;height:${size}px;border-radius:${radius};object-fit:cover;flex-shrink:0;" onerror="this.style.display='none'" />`;
   }
 
+  _textScale() {
+    const configured = Number(this._config.text_size);
+    if (!Number.isFinite(configured) || configured <= 0) {
+      return 1;
+    }
+    return Math.max(0.6, Math.min(3, configured));
+  }
+
+  _scaledPx(basePx, minimumPx = 10) {
+    const scaled = Math.round(basePx * this._textScale());
+    return `${Math.max(minimumPx, scaled)}px`;
+  }
+
+  _winnerImageSize(photoSize) {
+    const configured = Number(this._config.winner_image_size);
+    if (Number.isFinite(configured) && configured > 0) {
+      return Math.round(configured);
+    }
+    return Math.max(220, Math.round(photoSize * 3));
+  }
+
   _winnerSection(players, scoreField, photoSize) {
     if (!players.length) {
       return `
         <section>
-          <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.65;margin-bottom:8px;">Winner</div>
-          <div style="opacity:0.7;">No winner yet</div>
+          <div style="font-size:${this._scaledPx(12, 10)};letter-spacing:0.08em;text-transform:uppercase;opacity:0.65;margin-bottom:8px;">Winner</div>
+          <div style="opacity:0.7;font-size:${this._scaledPx(14, 11)};">No winner yet</div>
         </section>
       `;
     }
@@ -199,19 +220,24 @@ class RHQuizCard extends HTMLElement {
     const winnerImage = this._displayImage(winner.photo);
     const score = winner[scoreField];
     const winnerScore = `${score >= 0 ? "+" : ""}${score}`;
-    const heroSize = photoSize > 36 ? photoSize : 80;
+    const heroSize = this._winnerImageSize(photoSize);
+    const titleSize = this._scaledPx(22, 14);
+    const scoreSize = this._scaledPx(16, 12);
+    const labelSize = this._scaledPx(12, 10);
+    const imageBlock = winnerImage
+      ? `<img src="${winnerImage}" alt="${winner.alias}" style="width:min(100%, ${heroSize}px);height:auto;max-height:${heroSize}px;object-fit:contain;border-radius:14px;display:block;" onerror="this.style.display='none'" />`
+      : this._photo(winner.photo, winner.alias, heroSize, "14px");
 
     return `
       <section>
-        <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.65;margin-bottom:8px;">Current Leader</div>
-        <div style="position:relative;min-height:200px;border-radius:14px;overflow:hidden;background:${winnerImage ? "center / cover no-repeat url('" + encodeURI(winnerImage).replace(/'/g, "%27") + "')" : "var(--primary-color)"};">
-          <div style="position:absolute;inset:0;background:linear-gradient(to top, rgba(0,0,0,0.78), rgba(0,0,0,0.2));"></div>
-          <div style="position:absolute;left:16px;right:16px;bottom:16px;color:#fff;display:flex;align-items:flex-end;gap:14px;">
-            ${!winnerImage ? this._photo(winner.photo, winner.alias, heroSize, "14px") : ""}
-            <div>
-              <div style="font-size:22px;font-weight:800;line-height:1.2;">${winner.alias}</div>
-              <div style="font-size:16px;opacity:0.92;font-weight:600;">${winnerScore} pts</div>
-            </div>
+        <div style="font-size:${labelSize};letter-spacing:0.08em;text-transform:uppercase;opacity:0.65;margin-bottom:8px;">Current Leader</div>
+        <div style="display:grid;gap:12px;">
+          <div style="display:flex;justify-content:center;align-items:center;min-height:120px;border-radius:14px;overflow:hidden;background:rgba(128,128,128,0.1);padding:8px;">
+            ${imageBlock}
+          </div>
+          <div style="display:grid;gap:2px;">
+            <div style="font-size:${titleSize};font-weight:800;line-height:1.2;">${winner.alias}</div>
+            <div style="font-size:${scoreSize};opacity:0.92;font-weight:600;">${winnerScore} pts</div>
           </div>
         </div>
       </section>
@@ -225,22 +251,40 @@ class RHQuizCard extends HTMLElement {
     const attrs = roundState.attributes || {};
     const rounds = Array.isArray(attrs.quiz_rounds) ? attrs.quiz_rounds : [];
     const activeIndex = typeof attrs.active_round_index === "number" ? attrs.active_round_index : null;
+    const positionIndex = typeof attrs.round_position_index === "number" ? attrs.round_position_index : null;
     const activeName = typeof attrs.active_round_name === "string" && attrs.active_round_name.trim()
       ? attrs.active_round_name.trim() : null;
     const totalRounds = typeof attrs.total_rounds === "number" ? attrs.total_rounds : rounds.length;
 
-    const nextIndex = activeIndex !== null ? activeIndex + 1 : null;
+    const nextIndex = activeIndex !== null
+      ? activeIndex + 1
+      : positionIndex !== null ? positionIndex + 1 : 0;
     const nextName = nextIndex !== null && nextIndex < rounds.length ? rounds[nextIndex] : null;
+    const hasActiveRound = activeIndex !== null;
 
-    const roundCounter = activeIndex !== null && totalRounds > 0
-      ? `Round ${activeIndex + 1} of ${totalRounds}`
+    const roundCounter = nextIndex !== null && totalRounds > 0 && nextIndex < totalRounds
+      ? `Round ${nextIndex + 1} of ${totalRounds}`
       : totalRounds > 0 ? `${totalRounds} rounds` : "";
+    const activeBgColor = typeof this._config.round_info_bg_color === "string" && this._config.round_info_bg_color.trim()
+      ? this._config.round_info_bg_color.trim()
+      : "var(--primary-color)";
+    const activeFgColor = typeof this._config.round_info_fg_color === "string" && this._config.round_info_fg_color.trim()
+      ? this._config.round_info_fg_color.trim()
+      : "var(--text-primary-color,#fff)";
+    const breakBgColor = typeof this._config.next_round_info_bg_color === "string" && this._config.next_round_info_bg_color.trim()
+      ? this._config.next_round_info_bg_color.trim()
+      : "var(--accent-color,#b85042)";
+    const breakFgColor = typeof this._config.next_round_info_fg_color === "string" && this._config.next_round_info_fg_color.trim()
+      ? this._config.next_round_info_fg_color.trim()
+      : activeFgColor;
+    const bgColor = hasActiveRound ? activeBgColor : breakBgColor;
+    const fgColor = hasActiveRound ? activeFgColor : breakFgColor;
 
     return `
-      <section style="background:var(--primary-color);border-radius:14px;padding:16px 20px;color:var(--text-primary-color,#fff);">
-        ${roundCounter ? `<div style="font-size:12px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;opacity:0.85;margin-bottom:4px;">${roundCounter}</div>` : ""}
-        <div style="font-size:20px;font-weight:800;line-height:1.25;">${activeName || "No active round"}</div>
-        ${nextName ? `<div style="font-size:13px;opacity:0.8;margin-top:4px;">Up next: ${nextName}</div>` : ""}
+      <section style="background:${bgColor};border-radius:14px;padding:16px 20px;color:${fgColor};">
+        ${roundCounter ? `<div style="font-size:${this._scaledPx(12, 10)};font-weight:600;letter-spacing:0.1em;text-transform:uppercase;opacity:0.85;margin-bottom:4px;">${roundCounter}</div>` : ""}
+        <div style="font-size:${this._scaledPx(20, 14)};font-weight:800;line-height:1.25;">Next Round: ${nextName || "No remaining rounds"}</div>
+        ${activeName ? `<div style="font-size:${this._scaledPx(13, 11)};opacity:0.8;margin-top:4px;">Current Round: ${activeName}</div>` : ""}
       </section>
     `;
   }
@@ -255,12 +299,12 @@ class RHQuizCard extends HTMLElement {
       .map(
         (player, index) => `
           <div style="display:flex;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid rgba(128,128,128,0.2);${player.enabled ? "" : "opacity:0.45;"}">
-            <div style="min-width:34px;font-weight:700;">${labels[index]}</div>
+            <div style="min-width:34px;font-weight:700;font-size:${this._scaledPx(14, 11)};">${labels[index]}</div>
             ${withPhoto ? this._photo(player.photo, player.alias, photoSize) : ""}
             <div style="flex:1;min-width:0;">
-              <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${player.alias}</div>
+              <div style="font-weight:600;font-size:${this._scaledPx(15, 11)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${player.alias}</div>
             </div>
-            <div style="text-align:right;font-weight:700;">${player[scoreField] >= 0 ? "+" : ""}${player[scoreField]}</div>
+            <div style="text-align:right;font-weight:700;font-size:${this._scaledPx(15, 11)};">${player[scoreField] >= 0 ? "+" : ""}${player[scoreField]}</div>
           </div>
         `
       )
@@ -295,14 +339,14 @@ class RHQuizCard extends HTMLElement {
           ${showWinner ? this._winnerSection(winnerPlayers, winnerScoreField, photoSize) : ""}
           ${showLeaderboard ? `
           <section>
-            <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.65;margin-bottom:6px;">Leaderboard</div>
+            <div style="font-size:${this._scaledPx(12, 10)};letter-spacing:0.08em;text-transform:uppercase;opacity:0.65;margin-bottom:6px;">Leaderboard</div>
             <div>${this._leaderboardRows(leaderboardPlayers, leaderboardScoreField, true, photoSize)}</div>
           </section>` : ""}
           ${showRoundLeaderboard ? `
           <section>
             <div style="display:grid;gap:4px;margin-bottom:6px;">
-              <div style="font-size:15px;font-weight:700;line-height:1.25;">${roundLeaderboardTitle}</div>
-              <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.65;">Round Leaderboard</div>
+              <div style="font-size:${this._scaledPx(15, 12)};font-weight:700;line-height:1.25;">${roundLeaderboardTitle}</div>
+              <div style="font-size:${this._scaledPx(12, 10)};letter-spacing:0.08em;text-transform:uppercase;opacity:0.65;">Round Leaderboard</div>
             </div>
             <div>${this._leaderboardRows(roundPlayers, "round", true, photoSize)}</div>
           </section>` : ""}
@@ -328,3 +372,6 @@ if (!window.customCards.find((card) => card.type === "rh-quiz-card")) {
     description: "Shows winner, leaderboard and round leaderboard",
   });
 }
+
+
+

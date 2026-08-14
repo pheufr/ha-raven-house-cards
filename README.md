@@ -5,6 +5,7 @@ This repository contains the Raven House Lovelace/dashboard cards for Home Assis
 Cards included:
 
 - `rh-jobs-card`
+- `rh-notes-card`
 - `rh-quiz-card`
 - `rh-quiz-master-card`
 - `rh-quiz-round-card`
@@ -32,22 +33,16 @@ resources:
     type: module
 ```
 
-The individual `rh-*-card.js` files are kept in the repository for direct/manual installs, but a standard HACS install should use the bundled `ha-raven-house-cards.js` resource above.
+### Source Layout and Build
 
-Example resource entries for manual installs:
+- Source files live in `src/cards/` and are bundled via `src/index.js`.
+- The distributed file `ha-raven-house-cards.js` is generated from source and should not be edited directly.
 
-```yaml
-resources:
-  - url: /hacsfiles/ha-raven-house-cards/rh-jobs-card.js
-    type: module
-  - url: /hacsfiles/ha-raven-house-cards/rh-quiz-card.js
-    type: module
-  - url: /hacsfiles/ha-raven-house-cards/rh-quiz-master-card.js
-    type: module
-  - url: /hacsfiles/ha-raven-house-cards/rh-quiz-round-card.js
-    type: module
-  - url: /hacsfiles/ha-raven-house-cards/rh-soundboard-card.js
-    type: module
+Build locally:
+
+```bash
+npm install
+npm run build
 ```
 
 ## Card Examples
@@ -67,28 +62,98 @@ job_entities:
 
 ```yaml
 type: custom:rh-quiz-card
+title: RH Quiz Card
 show_winner: true
 show_leaderboard: true
 show_round_leaderboard: true
+show_round_info: true
 show_disabled: false
 max_players: 10
+winner_score: overall
+leaderboard_score: overall
+photo_size: 48
+text_size: 1
+winner_image_size: 320
+round_info_bg_color: "#0f4c81"
+round_info_fg_color: "#ffffff"
+next_round_info_bg_color: "#7a2f24"
+next_round_info_fg_color: "#ffffff"
 ```
+
+Quiz card settings:
+
+- `title` (string): Card header. Use `""` to hide the header.
+- `show_winner` (boolean, default `true`): Show/hide the current winner section.
+- `show_leaderboard` (boolean, default `true`): Show/hide the main leaderboard.
+- `show_round_leaderboard` (boolean, default `true`): Show/hide the round leaderboard.
+- `show_round_info` (boolean, default `false`): Show/hide the active round info banner.
+- `show_disabled` (boolean, default `false`): Include disabled players in rankings.
+- `max_players` (number, default `10`): Maximum number of quiz players to show.
+- `winner_score` (`overall` or `total`, default `overall`): Score basis for the winner card.
+- `leaderboard_score` (`overall`, `total`, or `round`, default `overall`): Score basis for the main leaderboard.
+- `photo_size` (number, default `36`): Avatar size in leaderboard rows.
+- `text_size` (number, default `1`): Scales quiz-card text for positions, names, scores, and section labels.
+- `winner_image_size` (number, default `max(220, photo_size * 3)`): Maximum rendered winner-image size in pixels. The winner image scales responsively to available width and is no longer cropped.
+- `round_info_bg_color` (string, default `var(--primary-color)`): Background color for the round info banner.
+- `round_info_fg_color` (string, default `var(--text-primary-color,#fff)`): Foreground/text color for the round info banner.
+- `next_round_info_bg_color` (string, default `var(--accent-color,#b85042)`): Background color for the round info banner during breaks (no active round).
+- `next_round_info_fg_color` (string, default `round_info_fg_color`): Foreground/text color for the round info banner during breaks.
 
 ### RH Quiz Master
 
 ```yaml
 type: custom:rh-quiz-master-card
+title: RH Quiz Master Control
 point_buttons: [5, 10]
 compact: false
 show_photos: true
+text_size: 1
 ```
+
+Quiz master settings:
+
+- `title` (string): Card header. Use `""` to hide the header.
+- `point_buttons` (number array, default `[5, 1, -1, -5]`): Scoring buttons shown for each player. Positive numbers add points; negative numbers remove points.
+- `compact` (boolean, default `false`): Use a denser player layout with smaller spacing.
+- `show_photos` (boolean, default `false`): Show/hide player avatars.
+- `text_size` (number, default `1`): Scales quiz-master text for labels, names, scores, and button text.
+
+Quiz master round control behavior:
+
+- Shows `End Round` while a round is active.
+- Shows `Start Round` during a break (no active round).
 
 ### RH Quiz Round
 
 ```yaml
 type: custom:rh-quiz-round-card
 title: Quiz Rounds
+text_size: 1
 ```
+
+Quiz round settings:
+
+- `title` (string): Card header. Use `""` to hide the header.
+- `text_size` (number, default `1`): Scales quiz-round text for input, labels, round names, and action buttons.
+
+Quiz round controls:
+
+- `Set Active` marks a round as currently running.
+- `Set Position` sets the remembered position used for `Start Round` during breaks without activating that round.
+
+### Global Sizing Tips
+
+Use these starting points to tune readability across quiz cards (`rh-quiz-card`, `rh-quiz-master-card`, and `rh-quiz-round-card`):
+
+- TV / wall display (3m+ viewing distance): set `text_size: 1.25` to `1.5`, `photo_size: 56` to `72`, and `winner_image_size: 360` to `520`.
+- Tablet / countertop dashboard: set `text_size: 1.05` to `1.2`, `photo_size: 40` to `56`, and `winner_image_size: 280` to `380`.
+- Phone / compact panel: set `text_size: 0.9` to `1`, `photo_size: 28` to `40`, and `winner_image_size: 220` to `300`.
+
+Quick rules of thumb:
+
+- Increase `text_size` first for readability, then adjust `photo_size`.
+- Keep `winner_image_size` roughly `5x` to `8x` your `text_size` baseline body text height to avoid clipping and maintain visual balance.
+- In tight layouts, combine `compact: true` (quiz master) with a modest `text_size` increase instead of very large `photo_size`.
 
 ### RH Soundboard
 
@@ -119,6 +184,23 @@ Clip fields:
 - `fg_color`: optional per-button foreground/text color
 - `bg_color`: optional per-button background color
 
+### RH Notes
+
+```yaml
+type: custom:rh-notes-card
+title: RH Notes
+entity_id: sensor.kitchen_note
+fg_color: "#1f1f1f"
+```
+
+Notes settings:
+
+- `title` (string, default `RH Notes`): Card header. Use `""` to hide the header.
+- `entity_id` (string): Entity whose state is rendered as the note text.
+- `fg_color` (string, default theme text color): Foreground color for both the title and the note text.
+
+The card stays transparent apart from the header and the note text itself, and it automatically reflects entity state changes.
+
 ## Example Dashboard
 
 See `examples/quiz-tv-dashboard.yaml` for a larger dashboard example.
@@ -126,6 +208,7 @@ See `examples/quiz-tv-dashboard.yaml` for a larger dashboard example.
 ## Notes
 
 - Install `ha-raven-house` as an `Integration` repository in HACS for backend entities/services.
+- This repository ships the combined bundle `ha-raven-house-cards.js` as the supported dashboard resource.
 - Hard refresh browser cache after card upgrades when kiosk/remote sessions are pinned.
 
 ## License

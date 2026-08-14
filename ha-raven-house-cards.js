@@ -189,6 +189,19 @@ class RHJobsCard extends HTMLElement {
     return title === "" ? "" : ` header="${title}"`;
   }
 
+  _textScale() {
+    const configured = Number(this._config.text_size);
+    if (!Number.isFinite(configured) || configured <= 0) {
+      return 1;
+    }
+    return Math.max(0.6, Math.min(3, configured));
+  }
+
+  _scaledPx(basePx, minimumPx = 10) {
+    const scaled = Math.round(basePx * this._textScale());
+    return `${Math.max(minimumPx, scaled)}px`;
+  }
+
   _renderJobTile(job, showImages) {
     const orientation = this._orientation();
     const tileDirection = showImages ? (orientation === "horizontal" ? "row" : "column") : "row";
@@ -531,12 +544,33 @@ class RHQuizCard extends HTMLElement {
     return `<img src="${resolvedPhoto}" alt="${label}" style="width:${size}px;height:${size}px;border-radius:${radius};object-fit:cover;flex-shrink:0;" onerror="this.style.display='none'" />`;
   }
 
+  _textScale() {
+    const configured = Number(this._config.text_size);
+    if (!Number.isFinite(configured) || configured <= 0) {
+      return 1;
+    }
+    return Math.max(0.6, Math.min(3, configured));
+  }
+
+  _scaledPx(basePx, minimumPx = 10) {
+    const scaled = Math.round(basePx * this._textScale());
+    return `${Math.max(minimumPx, scaled)}px`;
+  }
+
+  _winnerImageSize(photoSize) {
+    const configured = Number(this._config.winner_image_size);
+    if (Number.isFinite(configured) && configured > 0) {
+      return Math.round(configured);
+    }
+    return Math.max(220, Math.round(photoSize * 3));
+  }
+
   _winnerSection(players, scoreField, photoSize) {
     if (!players.length) {
       return `
         <section>
-          <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.65;margin-bottom:8px;">Winner</div>
-          <div style="opacity:0.7;">No winner yet</div>
+          <div style="font-size:${this._scaledPx(12, 10)};letter-spacing:0.08em;text-transform:uppercase;opacity:0.65;margin-bottom:8px;">Winner</div>
+          <div style="opacity:0.7;font-size:${this._scaledPx(14, 11)};">No winner yet</div>
         </section>
       `;
     }
@@ -545,19 +579,24 @@ class RHQuizCard extends HTMLElement {
     const winnerImage = this._displayImage(winner.photo);
     const score = winner[scoreField];
     const winnerScore = `${score >= 0 ? "+" : ""}${score}`;
-    const heroSize = photoSize > 36 ? photoSize : 80;
+    const heroSize = this._winnerImageSize(photoSize);
+    const titleSize = this._scaledPx(22, 14);
+    const scoreSize = this._scaledPx(16, 12);
+    const labelSize = this._scaledPx(12, 10);
+    const imageBlock = winnerImage
+      ? `<img src="${winnerImage}" alt="${winner.alias}" style="width:min(100%, ${heroSize}px);height:auto;max-height:${heroSize}px;object-fit:contain;border-radius:14px;display:block;" onerror="this.style.display='none'" />`
+      : this._photo(winner.photo, winner.alias, heroSize, "14px");
 
     return `
       <section>
-        <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.65;margin-bottom:8px;">Current Leader</div>
-        <div style="position:relative;min-height:200px;border-radius:14px;overflow:hidden;background:${winnerImage ? "center / cover no-repeat url('" + encodeURI(winnerImage).replace(/'/g, "%27") + "')" : "var(--primary-color)"};">
-          <div style="position:absolute;inset:0;background:linear-gradient(to top, rgba(0,0,0,0.78), rgba(0,0,0,0.2));"></div>
-          <div style="position:absolute;left:16px;right:16px;bottom:16px;color:#fff;display:flex;align-items:flex-end;gap:14px;">
-            ${!winnerImage ? this._photo(winner.photo, winner.alias, heroSize, "14px") : ""}
-            <div>
-              <div style="font-size:22px;font-weight:800;line-height:1.2;">${winner.alias}</div>
-              <div style="font-size:16px;opacity:0.92;font-weight:600;">${winnerScore} pts</div>
-            </div>
+        <div style="font-size:${labelSize};letter-spacing:0.08em;text-transform:uppercase;opacity:0.65;margin-bottom:8px;">Current Leader</div>
+        <div style="display:grid;gap:12px;">
+          <div style="display:flex;justify-content:center;align-items:center;min-height:120px;border-radius:14px;overflow:hidden;background:rgba(128,128,128,0.1);padding:8px;">
+            ${imageBlock}
+          </div>
+          <div style="display:grid;gap:2px;">
+            <div style="font-size:${titleSize};font-weight:800;line-height:1.2;">${winner.alias}</div>
+            <div style="font-size:${scoreSize};opacity:0.92;font-weight:600;">${winnerScore} pts</div>
           </div>
         </div>
       </section>
@@ -581,12 +620,18 @@ class RHQuizCard extends HTMLElement {
     const roundCounter = activeIndex !== null && totalRounds > 0
       ? `Round ${activeIndex + 1} of ${totalRounds}`
       : totalRounds > 0 ? `${totalRounds} rounds` : "";
+    const bgColor = typeof this._config.round_info_bg_color === "string" && this._config.round_info_bg_color.trim()
+      ? this._config.round_info_bg_color.trim()
+      : "var(--primary-color)";
+    const fgColor = typeof this._config.round_info_fg_color === "string" && this._config.round_info_fg_color.trim()
+      ? this._config.round_info_fg_color.trim()
+      : "var(--text-primary-color,#fff)";
 
     return `
-      <section style="background:var(--primary-color);border-radius:14px;padding:16px 20px;color:var(--text-primary-color,#fff);">
-        ${roundCounter ? `<div style="font-size:12px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;opacity:0.85;margin-bottom:4px;">${roundCounter}</div>` : ""}
-        <div style="font-size:20px;font-weight:800;line-height:1.25;">${activeName || "No active round"}</div>
-        ${nextName ? `<div style="font-size:13px;opacity:0.8;margin-top:4px;">Up next: ${nextName}</div>` : ""}
+      <section style="background:${bgColor};border-radius:14px;padding:16px 20px;color:${fgColor};">
+        ${roundCounter ? `<div style="font-size:${this._scaledPx(12, 10)};font-weight:600;letter-spacing:0.1em;text-transform:uppercase;opacity:0.85;margin-bottom:4px;">${roundCounter}</div>` : ""}
+        <div style="font-size:${this._scaledPx(20, 14)};font-weight:800;line-height:1.25;">${activeName || "No active round"}</div>
+        ${nextName ? `<div style="font-size:${this._scaledPx(13, 11)};opacity:0.8;margin-top:4px;">Up next: ${nextName}</div>` : ""}
       </section>
     `;
   }
@@ -601,12 +646,12 @@ class RHQuizCard extends HTMLElement {
       .map(
         (player, index) => `
           <div style="display:flex;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid rgba(128,128,128,0.2);${player.enabled ? "" : "opacity:0.45;"}">
-            <div style="min-width:34px;font-weight:700;">${labels[index]}</div>
+            <div style="min-width:34px;font-weight:700;font-size:${this._scaledPx(14, 11)};">${labels[index]}</div>
             ${withPhoto ? this._photo(player.photo, player.alias, photoSize) : ""}
             <div style="flex:1;min-width:0;">
-              <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${player.alias}</div>
+              <div style="font-weight:600;font-size:${this._scaledPx(15, 11)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${player.alias}</div>
             </div>
-            <div style="text-align:right;font-weight:700;">${player[scoreField] >= 0 ? "+" : ""}${player[scoreField]}</div>
+            <div style="text-align:right;font-weight:700;font-size:${this._scaledPx(15, 11)};">${player[scoreField] >= 0 ? "+" : ""}${player[scoreField]}</div>
           </div>
         `
       )
@@ -641,14 +686,14 @@ class RHQuizCard extends HTMLElement {
           ${showWinner ? this._winnerSection(winnerPlayers, winnerScoreField, photoSize) : ""}
           ${showLeaderboard ? `
           <section>
-            <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.65;margin-bottom:6px;">Leaderboard</div>
+            <div style="font-size:${this._scaledPx(12, 10)};letter-spacing:0.08em;text-transform:uppercase;opacity:0.65;margin-bottom:6px;">Leaderboard</div>
             <div>${this._leaderboardRows(leaderboardPlayers, leaderboardScoreField, true, photoSize)}</div>
           </section>` : ""}
           ${showRoundLeaderboard ? `
           <section>
             <div style="display:grid;gap:4px;margin-bottom:6px;">
-              <div style="font-size:15px;font-weight:700;line-height:1.25;">${roundLeaderboardTitle}</div>
-              <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.65;">Round Leaderboard</div>
+              <div style="font-size:${this._scaledPx(15, 12)};font-weight:700;line-height:1.25;">${roundLeaderboardTitle}</div>
+              <div style="font-size:${this._scaledPx(12, 10)};letter-spacing:0.08em;text-transform:uppercase;opacity:0.65;">Round Leaderboard</div>
             </div>
             <div>${this._leaderboardRows(roundPlayers, "round", true, photoSize)}</div>
           </section>` : ""}
@@ -674,6 +719,214 @@ if (!window.customCards.find((card) => card.type === "rh-quiz-card")) {
     description: "Shows winner, leaderboard and round leaderboard",
   });
 }
+
+
+
+
+
+class RHNotesCard extends HTMLElement {
+  constructor() {
+    super();
+    this._lastRenderKey = "";
+    this._fitRaf = 0;
+    this._resizeObserver = null;
+  }
+
+  setConfig(config) {
+    const safeConfig = config && typeof config === "object" ? config : {};
+    const entityId = typeof safeConfig.entity_id === "string"
+      ? safeConfig.entity_id.trim()
+      : typeof safeConfig.entity === "string"
+        ? safeConfig.entity.trim()
+        : "";
+
+    if (!entityId) {
+      throw new Error("RH Notes card requires entity_id");
+    }
+
+    this._config = {
+      ...safeConfig,
+      entity_id: entityId,
+      fg_color: typeof safeConfig.fg_color === "string"
+        ? safeConfig.fg_color
+        : typeof safeConfig.foreground_color === "string"
+          ? safeConfig.foreground_color
+          : "",
+    };
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    const key = this._buildRenderKey();
+    if (key === this._lastRenderKey) {
+      this._scheduleFit();
+      return;
+    }
+    this._lastRenderKey = key;
+    this._render();
+  }
+
+  connectedCallback() {
+    if (!this._resizeObserver && typeof ResizeObserver !== "undefined") {
+      this._resizeObserver = new ResizeObserver(() => this._scheduleFit());
+    }
+    if (this._resizeObserver) {
+      this._resizeObserver.observe(this);
+    }
+    this._scheduleFit();
+  }
+
+  disconnectedCallback() {
+    if (this._resizeObserver) {
+      this._resizeObserver.disconnect();
+    }
+    if (this._fitRaf) {
+      cancelAnimationFrame(this._fitRaf);
+      this._fitRaf = 0;
+    }
+  }
+
+  _entityId() {
+    return this._config?.entity_id || this._config?.entity || "";
+  }
+
+  _entityState() {
+    return this._hass?.states?.[this._entityId()] || null;
+  }
+
+  _title() {
+    if (this._config?.title === undefined) {
+      return "RH Notes";
+    }
+    return this._config.title;
+  }
+
+  _renderHeader() {
+    const title = this._title();
+    return title === "" ? "" : ` header="${title}"`;
+  }
+
+  _fgColor() {
+    return this._config?.fg_color || "var(--primary-text-color)";
+  }
+
+  _textValue() {
+    const value = this._entityState()?.state;
+    if (value === undefined || value === null || value === "") {
+      return "—";
+    }
+    return String(value);
+  }
+
+  _buildRenderKey() {
+    const state = this._entityState();
+    const attrs = state?.attributes || {};
+    return [
+      this._entityId(),
+      state?.state ?? "missing",
+      attrs.friendly_name || "",
+      this._title(),
+      this._fgColor(),
+    ].join("~");
+  }
+
+  _scheduleFit() {
+    if (!this.isConnected) {
+      return;
+    }
+
+    if (this._fitRaf) {
+      cancelAnimationFrame(this._fitRaf);
+    }
+
+    this._fitRaf = requestAnimationFrame(() => {
+      this._fitRaf = 0;
+      this._fitText();
+    });
+  }
+
+  _fitText() {
+    const stage = this.querySelector('[data-role="note-stage"]');
+    const text = this.querySelector('[data-role="note-text"]');
+    if (!stage || !text) {
+      return;
+    }
+
+    const maxWidth = Math.max(0, stage.clientWidth - 8);
+    const maxHeight = Math.max(0, stage.clientHeight - 8);
+    if (!maxWidth || !maxHeight) {
+      return;
+    }
+
+    const squareSize = Math.max(0, Math.min(maxWidth, maxHeight));
+    text.style.width = `${squareSize}px`;
+    text.style.height = `${squareSize}px`;
+
+    const minFont = 14;
+    const maxFont = Math.max(minFont, Math.min(220, Math.floor(Math.min(maxWidth, maxHeight) * 1.75)));
+    let low = minFont;
+    let high = maxFont;
+    let best = minFont;
+
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      text.style.fontSize = `${mid}px`;
+
+      if (text.scrollWidth <= maxWidth && text.scrollHeight <= maxHeight) {
+        best = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+
+    text.style.fontSize = `${best}px`;
+    text.style.opacity = "1";
+  }
+
+  _render() {
+    if (!this._hass || !this._config) {
+      return;
+    }
+
+    const fgColor = this._fgColor();
+    const noteText = this._textValue();
+
+    this.innerHTML = `
+      <ha-card${this._renderHeader()} style="background:transparent;box-shadow:none;border:none;color:${fgColor};--paper-card-header-color:${fgColor};--paper-card-header-text-color:${fgColor};">
+        <div style="padding:16px;min-height:220px;box-sizing:border-box;display:flex;align-items:stretch;justify-content:stretch;">
+          <div data-role="note-stage" style="position:relative;flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;">
+            <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;transform:rotate(-5deg) skew(-2deg, 0deg);transform-origin:center;">
+              <div data-role="note-text" style="max-width:100%;max-height:100%;width:100%;display:flex;align-items:center;justify-content:center;text-align:center;white-space:normal;overflow-wrap:anywhere;word-break:break-word;line-height:0.95;font-family:'Segoe Print','Bradley Hand','Comic Sans MS','Chalkboard SE',cursive;font-weight:700;letter-spacing:0.01em;color:${fgColor};opacity:0;">
+                ${noteText}
+              </div>
+            </div>
+          </div>
+        </div>
+      </ha-card>
+    `;
+
+    this._scheduleFit();
+  }
+
+  getCardSize() {
+    return 4;
+  }
+}
+
+if (!customElements.get("rh-notes-card")) {
+  customElements.define("rh-notes-card", RHNotesCard);
+}
+
+window.customCards = window.customCards || [];
+if (!window.customCards.find((card) => card.type === "rh-notes-card")) {
+  window.customCards.push({
+    type: "rh-notes-card",
+    name: "RH Notes Card",
+    description: "Display a note-style entity state with live updates",
+  });
+}
+
 
 
 
@@ -839,6 +1092,7 @@ class RHQuizMasterCard extends HTMLElement {
       `color:${primary ? "var(--text-primary-color, #fff)" : "var(--primary-text-color)"}`,
       `padding:${compact ? "5px 8px" : "10px 12px"}`,
       "font:inherit",
+      `font-size:${this._scaledPx(compact ? 12 : 14, 10)}`,
       "font-weight:700",
       "cursor:pointer",
       `min-height:${compact ? "30px" : "40px"}`,
@@ -861,17 +1115,17 @@ class RHQuizMasterCard extends HTMLElement {
     const nameBlock = compact
       ? `<div style="min-width:0;">
            <div style="display:flex;gap:6px;align-items:baseline;flex-wrap:wrap;">
-             <div style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${player.alias || "No alias"}</div>
-             <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0.75;">${player.name}</div>
-             <div style="opacity:0.65;font-size:10px;white-space:nowrap;">· Total: <strong>${player.total}</strong></div>
+             <div style="font-weight:700;font-size:${this._scaledPx(14, 11)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${player.alias || "No alias"}</div>
+             <div style="font-size:${this._scaledPx(13, 10)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0.75;">${player.name}</div>
+             <div style="opacity:0.65;font-size:${this._scaledPx(10, 9)};white-space:nowrap;">· Total: <strong>${player.total}</strong></div>
            </div>
          </div>`
       : `<div style="min-width:0;">
            <div style="display:flex;gap:6px;align-items:baseline;flex-wrap:wrap;">
-             <div style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${player.alias || "No alias"}</div>
-             <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${player.name}</div>
+             <div style="font-weight:700;font-size:${this._scaledPx(15, 11)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${player.alias || "No alias"}</div>
+             <div style="font-size:${this._scaledPx(14, 10)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${player.name}</div>
            </div>
-           <div style="font-size:12px;opacity:0.75;">Total Points: <strong>${player.total}</strong></div>
+           <div style="font-size:${this._scaledPx(12, 10)};opacity:0.75;">Total Points: <strong>${player.total}</strong></div>
          </div>`;
 
     const photoSize = compact ? 18 : 24;
@@ -883,7 +1137,7 @@ class RHQuizMasterCard extends HTMLElement {
             ${this._renderPhoto(player.photo, player.name, photoSize)}
             ${nameBlock}
           </div>
-          <div style="font-size:${compact ? "18px" : "24px"};font-weight:800;line-height:1;">${player.round >= 0 ? "+" : ""}${player.round}</div>
+          <div style="font-size:${this._scaledPx(compact ? 18 : 24, 12)};font-weight:800;line-height:1;">${player.round >= 0 ? "+" : ""}${player.round}</div>
         </div>
         <div style="display:flex;gap:${compact ? "4px" : "6px"};flex-wrap:wrap;">
           ${actionButtons}
@@ -896,7 +1150,7 @@ class RHQuizMasterCard extends HTMLElement {
   _renderNewQuizConfirm() {
     return `
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:10px 12px;border-radius:12px;background:rgba(var(--rgb-red-color,255,0,0),0.12);margin-bottom:10px;">
-        <span style="flex:1;font-weight:600;font-size:13px;">Reset all scores and start a new quiz?</span>
+        <span style="flex:1;font-weight:600;font-size:${this._scaledPx(13, 10)};">Reset all scores and start a new quiz?</span>
         <button data-action="new-quiz-confirm" style="${this._buttonStyle(true)}">Confirm</button>
         <button data-action="new-quiz-cancel" style="${this._buttonStyle()}">Cancel</button>
       </div>
@@ -916,7 +1170,7 @@ class RHQuizMasterCard extends HTMLElement {
             <button data-action="new-round" style="${this._buttonStyle()}">New Round</button>
             <button data-action="new-quiz" style="${this._buttonStyle(true)}">Start New Quiz</button>
           </div>`}
-          <div style="font-size:${compact ? "12px" : "14px"};">
+          <div style="font-size:${this._scaledPx(compact ? 12 : 14, 10)};">
             ${players.map((player, index) => `${this._row(player, compact)}${index < players.length - 1 ? '<hr style="border:none;border-top:1px solid rgba(128,128,128,0.25);margin:0;">' : ""}`).join("") || '<div>No players</div>'}
           </div>
         </div>
@@ -1036,6 +1290,19 @@ class RHQuizRoundCard extends HTMLElement {
     return title === "" ? "" : ` header="${title}"`;
   }
 
+  _textScale() {
+    const configured = Number(this._config.text_size);
+    if (!Number.isFinite(configured) || configured <= 0) {
+      return 1;
+    }
+    return Math.max(0.6, Math.min(3, configured));
+  }
+
+  _scaledPx(basePx, minimumPx = 10) {
+    const scaled = Math.round(basePx * this._textScale());
+    return `${Math.max(minimumPx, scaled)}px`;
+  }
+
   _roundState() {
     return this._hass?.states?.["sensor.rh_quiz_rounds"] || null;
   }
@@ -1059,6 +1326,7 @@ class RHQuizRoundCard extends HTMLElement {
       `color:${primary ? "var(--text-primary-color, #fff)" : "var(--primary-text-color)"}`,
       `padding:${primary ? "10px 16px" : "8px 10px"}`,
       "font:inherit",
+      `font-size:${this._scaledPx(14, 10)}`,
       "font-weight:600",
       "cursor:pointer",
       "min-height:40px",
@@ -1117,7 +1385,7 @@ class RHQuizRoundCard extends HTMLElement {
       <ha-card${this._renderHeader()}>
         <div style="padding:16px;display:grid;gap:14px;">
           <div style="display:flex;gap:10px;align-items:center;">
-            <input data-role="round-input" type="text" placeholder="Add round name" style="flex:1;min-width:0;border:1px solid var(--divider-color);border-radius:12px;padding:10px 12px;background:var(--card-background-color);color:var(--primary-text-color);font:inherit;" />
+            <input data-role="round-input" type="text" placeholder="Add round name" style="flex:1;min-width:0;border:1px solid var(--divider-color);border-radius:12px;padding:10px 12px;background:var(--card-background-color);color:var(--primary-text-color);font:inherit;font-size:${this._scaledPx(14, 10)};" />
             <button data-action="add" style="${this._buttonStyle(true)};flex:0 0 auto;min-width:92px;">Add</button>
           </div>
           <div style="display:grid;gap:10px;">
@@ -1125,10 +1393,10 @@ class RHQuizRoundCard extends HTMLElement {
               <div style="padding:12px;border-radius:14px;background:var(--secondary-background-color);display:grid;gap:10px;">
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
                   <div style="min-width:0;display:flex;gap:10px;align-items:center;">
-                    <div style="font-weight:700;opacity:0.7;min-width:20px;">${index + 1}.</div>
-                    <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${round}</div>
+                    <div style="font-weight:700;font-size:${this._scaledPx(13, 10)};opacity:0.7;min-width:20px;">${index + 1}.</div>
+                    <div style="font-weight:600;font-size:${this._scaledPx(15, 11)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${round}</div>
                   </div>
-                  ${activeRoundIndex === index ? '<div style="font-size:12px;font-weight:700;color:var(--primary-color);">Active</div>' : ''}
+                  ${activeRoundIndex === index ? `<div style="font-size:${this._scaledPx(12, 10)};font-weight:700;color:var(--primary-color);">Active</div>` : ''}
                 </div>
                 <div style="display:flex;gap:8px;flex-wrap:wrap;">
                   <button data-action="activate" data-index="${index}" style="${this._buttonStyle(activeRoundIndex === index)};">${activeRoundIndex === index ? 'Clear Active' : 'Set Active'}</button>
@@ -1137,7 +1405,7 @@ class RHQuizRoundCard extends HTMLElement {
                   <button data-action="delete" data-index="${index}" style="${this._buttonStyle()};">Delete</button>
                 </div>
               </div>
-            `).join("") || '<div style="padding:12px 0;opacity:0.7;">No quiz rounds yet</div>'}
+            `).join("") || `<div style="padding:12px 0;opacity:0.7;font-size:${this._scaledPx(14, 10)};">No quiz rounds yet</div>`}
           </div>
         </div>
       </ha-card>

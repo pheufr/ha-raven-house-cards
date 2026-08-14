@@ -1,4 +1,4 @@
-﻿class RHJobsCard extends HTMLElement {
+class RHJobsCard extends HTMLElement {
   constructor() {
     super();
     this._resolvedMediaUrls = new Map();
@@ -337,3 +337,6 @@ if (!window.customCards.find((card) => card.type === "rh-jobs-card")) {
     description: "Shows due Raven House Jobs with images",
   });
 }
+
+
+
