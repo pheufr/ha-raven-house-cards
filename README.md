@@ -205,6 +205,7 @@ Notes settings:
 - `title` (string, default `RH Notes`): Card header. Use `""` to hide the header.
 - `entity_id` (string): Entity whose state is rendered as the note text.
 - `fg_color` (string, default theme text color): Foreground color for both the title and the note text.
+- `edit_on_click` (boolean, default `true`): When enabled, clicking the note opens the linked entity details so its value can be edited.
 
 The card stays transparent apart from the header and the note text itself, and it automatically reflects entity state changes.
 
