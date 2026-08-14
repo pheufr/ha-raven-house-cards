@@ -87,7 +87,7 @@ Quiz card settings:
 - `show_winner` (boolean, default `true`): Show/hide the current winner section.
 - `show_leaderboard` (boolean, default `true`): Show/hide the main leaderboard.
 - `show_round_leaderboard` (boolean, default `true`): Show/hide the round leaderboard.
-- `show_round_leaderboard_name` (boolean, default `true`): Show/hide the active round name above the round leaderboard. Set this to `false` if the round name is already shown in the round info banner.
+- `show_round_leaderboard_name` (boolean, default `true`): Show/hide the active round name line above the round leaderboard. Set this to `false` to remove that line entirely if the round name is already shown elsewhere.
 - `show_round_info` (boolean, default `false`): Show/hide the active round info banner.
 - `show_disabled` (boolean, default `false`): Include disabled players in rankings.
 - `max_players` (number, default `10`): Maximum number of quiz players to show.

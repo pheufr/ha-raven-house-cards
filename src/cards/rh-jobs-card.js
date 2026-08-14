@@ -75,7 +75,7 @@ class RHJobsCard extends HTMLElement {
     }
 
     if (!trimmed.startsWith("media-source://")) {
-      return trimmed;
+      return this._normalizeResolvedUrl(trimmed);
     }
 
     const cached = this._resolvedMediaUrls.get(trimmed);
@@ -92,6 +92,9 @@ class RHJobsCard extends HTMLElement {
       return "";
     }
     try {
+      if (this._hass && typeof this._hass.hassUrl === "function" && /^\//.test(url)) {
+        return this._hass.hassUrl(url);
+      }
       // Always return a fully-qualified absolute URL so that images load
       // correctly regardless of the page origin (e.g. HA Cast receiver).
       return new URL(url, window.location.origin).href;

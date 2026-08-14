@@ -53,7 +53,7 @@ class RHQuizCard extends HTMLElement {
       return "";
     }
     if (!trimmed.startsWith("media-source://")) {
-      return trimmed;
+          return this._normalizeResolvedUrl(trimmed);
     }
     const cached = this._resolvedMediaUrls.get(trimmed);
     if (cached && Date.now() - cached.resolvedAt < this._mediaCacheTtlMs) {
@@ -68,6 +68,9 @@ class RHQuizCard extends HTMLElement {
       return "";
     }
     try {
+      if (this._hass && typeof this._hass.hassUrl === "function" && /^\//.test(url)) {
+        return this._hass.hassUrl(url);
+      }
       // Always return a fully-qualified absolute URL so that images load
       // correctly regardless of the page origin (e.g. HA Cast receiver).
       return new URL(url, window.location.origin).href;
@@ -115,7 +118,7 @@ class RHQuizCard extends HTMLElement {
 
   _roundLeaderboardTitle() {
     if (!this._showRoundLeaderboardName()) {
-      return "This Round";
+      return "";
     }
     const activeRoundName = this._activeRoundState()?.attributes?.active_round_name;
     return typeof activeRoundName === "string" && activeRoundName.trim() ? activeRoundName.trim() : "This Round";
@@ -357,7 +360,7 @@ class RHQuizCard extends HTMLElement {
           ${showRoundLeaderboard ? `
           <section>
             <div style="display:grid;gap:4px;margin-bottom:6px;">
-              <div style="font-size:${this._scaledPx(15, 12)};font-weight:700;line-height:1.25;">${roundLeaderboardTitle}</div>
+              ${roundLeaderboardTitle ? `<div style="font-size:${this._scaledPx(15, 12)};font-weight:700;line-height:1.25;">${roundLeaderboardTitle}</div>` : ""}
               <div style="font-size:${this._scaledPx(12, 10)};letter-spacing:0.08em;text-transform:uppercase;opacity:0.65;">Round Leaderboard</div>
             </div>
             <div>${this._leaderboardRows(roundPlayers, "round", true, photoSize)}</div>
