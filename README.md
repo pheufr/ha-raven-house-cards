@@ -66,6 +66,7 @@ title: RH Quiz Card
 show_winner: true
 show_leaderboard: true
 show_round_leaderboard: true
+show_round_leaderboard_name: true
 show_round_info: true
 show_disabled: false
 max_players: 10
@@ -86,6 +87,7 @@ Quiz card settings:
 - `show_winner` (boolean, default `true`): Show/hide the current winner section.
 - `show_leaderboard` (boolean, default `true`): Show/hide the main leaderboard.
 - `show_round_leaderboard` (boolean, default `true`): Show/hide the round leaderboard.
+- `show_round_leaderboard_name` (boolean, default `true`): Show/hide the active round name above the round leaderboard. Set this to `false` if the round name is already shown in the round info banner.
 - `show_round_info` (boolean, default `false`): Show/hide the active round info banner.
 - `show_disabled` (boolean, default `false`): Include disabled players in rankings.
 - `max_players` (number, default `10`): Maximum number of quiz players to show.
@@ -94,10 +96,15 @@ Quiz card settings:
 - `photo_size` (number, default `36`): Avatar size in leaderboard rows.
 - `text_size` (number, default `1`): Scales quiz-card text for positions, names, scores, and section labels.
 - `winner_image_size` (number, default `max(220, photo_size * 3)`): Maximum rendered winner-image size in pixels. The winner image scales responsively to available width and is no longer cropped.
-- `round_info_bg_color` (string, default `var(--primary-color)`): Background color for the round info banner.
+- `round_info_bg_color` (string, default `var(--primary-color)`): Background color for the round info banner while a round is active.
 - `round_info_fg_color` (string, default `var(--text-primary-color,#fff)`): Foreground/text color for the round info banner.
 - `next_round_info_bg_color` (string, default `var(--accent-color,#b85042)`): Background color for the round info banner during breaks (no active round).
 - `next_round_info_fg_color` (string, default `round_info_fg_color`): Foreground/text color for the round info banner during breaks.
+
+Round info banner behavior:
+
+- When a round is active, the banner shows `Round x of Y`, the active round name, and `Next round: <name>`. If there is no next round, the final line is left blank.
+- When no round is active, the banner shows `Y Rounds` and `Next Round: <name>` based on the currently remembered round position.
 
 ### RH Quiz Master
 

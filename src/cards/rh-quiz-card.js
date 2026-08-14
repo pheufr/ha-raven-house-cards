@@ -16,7 +16,7 @@ class RHQuizCard extends HTMLElement {
     const players = this._players();
     const roundState = this._hass.states["sensor.rh_quiz_rounds"] || null;
     const roundKey = roundState
-      ? `${roundState.state}:${roundState.attributes?.active_round_index ?? ""}:${roundState.attributes?.active_round_name ?? ""}:${roundState.attributes?.round_position_index ?? ""}`
+      ? `${roundState.state}:${roundState.attributes?.active_round_index ?? ""}:${roundState.attributes?.active_round_name ?? ""}:${roundState.attributes?.round_position_index ?? ""}:${Array.isArray(roundState.attributes?.quiz_rounds) ? roundState.attributes.quiz_rounds.join("|") : ""}:${roundState.attributes?.total_rounds ?? ""}`
       : "";
     return [
       roundKey,
@@ -109,7 +109,14 @@ class RHQuizCard extends HTMLElement {
     return this._hass.states["sensor.rh_quiz_rounds"] || null;
   }
 
+  _showRoundLeaderboardName() {
+    return this._config.show_round_leaderboard_name !== false;
+  }
+
   _roundLeaderboardTitle() {
+    if (!this._showRoundLeaderboardName()) {
+      return "This Round";
+    }
     const activeRoundName = this._activeRoundState()?.attributes?.active_round_name;
     return typeof activeRoundName === "string" && activeRoundName.trim() ? activeRoundName.trim() : "This Round";
   }
@@ -244,7 +251,7 @@ class RHQuizCard extends HTMLElement {
     `;
   }
 
-  _roundInfoSection() {
+  _roundInfoSection(fullBleed = false) {
     const roundState = this._hass.states["sensor.rh_quiz_rounds"] || null;
     if (!roundState) return "";
 
@@ -255,16 +262,16 @@ class RHQuizCard extends HTMLElement {
     const activeName = typeof attrs.active_round_name === "string" && attrs.active_round_name.trim()
       ? attrs.active_round_name.trim() : null;
     const totalRounds = typeof attrs.total_rounds === "number" ? attrs.total_rounds : rounds.length;
-
-    const nextIndex = activeIndex !== null
-      ? activeIndex + 1
-      : positionIndex !== null ? positionIndex + 1 : 0;
-    const nextName = nextIndex !== null && nextIndex < rounds.length ? rounds[nextIndex] : null;
     const hasActiveRound = activeIndex !== null;
-
-    const roundCounter = nextIndex !== null && totalRounds > 0 && nextIndex < totalRounds
-      ? `Round ${nextIndex + 1} of ${totalRounds}`
-      : totalRounds > 0 ? `${totalRounds} rounds` : "";
+    const currentIndex = hasActiveRound ? activeIndex : positionIndex;
+    const nextIndex = currentIndex !== null ? currentIndex + 1 : 0;
+    const nextName = nextIndex < rounds.length ? rounds[nextIndex] : "";
+    const roundCounter = hasActiveRound
+      ? (activeIndex !== null && totalRounds > 0 ? `Round ${activeIndex + 1} of ${totalRounds}` : "")
+      : (totalRounds > 0 ? `${totalRounds} Rounds` : "");
+    const roundHeadline = hasActiveRound ? (activeName || "") : `Next Round: ${rounds[positionIndex ?? 0] || ""}`;
+    const roundDetail = hasActiveRound ? `Next round: ${nextName}` : "";
+    const emptyDetail = "&nbsp;";
     const activeBgColor = typeof this._config.round_info_bg_color === "string" && this._config.round_info_bg_color.trim()
       ? this._config.round_info_bg_color.trim()
       : "var(--primary-color)";
@@ -281,10 +288,10 @@ class RHQuizCard extends HTMLElement {
     const fgColor = hasActiveRound ? activeFgColor : breakFgColor;
 
     return `
-      <section style="background:${bgColor};border-radius:14px;padding:16px 20px;color:${fgColor};">
+      <section style="background:${bgColor};border-radius:${fullBleed ? "inherit" : "14px"};padding:${fullBleed ? "20px" : "16px 20px"};color:${fgColor};height:100%;box-sizing:border-box;">
         ${roundCounter ? `<div style="font-size:${this._scaledPx(12, 10)};font-weight:600;letter-spacing:0.1em;text-transform:uppercase;opacity:0.85;margin-bottom:4px;">${roundCounter}</div>` : ""}
-        <div style="font-size:${this._scaledPx(20, 14)};font-weight:800;line-height:1.25;">Next Round: ${nextName || "No remaining rounds"}</div>
-        ${activeName ? `<div style="font-size:${this._scaledPx(13, 11)};opacity:0.8;margin-top:4px;">Current Round: ${activeName}</div>` : ""}
+        <div style="font-size:${this._scaledPx(20, 14)};font-weight:800;line-height:1.25;">${roundHeadline || emptyDetail}</div>
+        <div style="font-size:${this._scaledPx(13, 11)};opacity:0.8;margin-top:4px;min-height:${this._scaledPx(13, 11)};">${roundDetail || emptyDetail}</div>
       </section>
     `;
   }
@@ -331,11 +338,16 @@ class RHQuizCard extends HTMLElement {
     const showRoundLeaderboard = this._config.show_round_leaderboard !== false;
     const showRoundInfo = Boolean(this._config.show_round_info);
     const roundLeaderboardTitle = this._roundLeaderboardTitle();
+    const visibleSections = [showRoundInfo, showWinner, showLeaderboard, showRoundLeaderboard].filter(Boolean).length;
+    const fullBleedRoundInfo = showRoundInfo && visibleSections === 1;
+    const contentStyle = fullBleedRoundInfo
+      ? "display:grid;height:100%;"
+      : "padding:16px;display:grid;gap:18px;";
 
     this.innerHTML = `
       <ha-card${this._renderHeader()}>
-        <div style="padding:16px;display:grid;gap:18px;">
-          ${showRoundInfo ? this._roundInfoSection() : ""}
+        <div style="${contentStyle}">
+          ${showRoundInfo ? this._roundInfoSection(fullBleedRoundInfo) : ""}
           ${showWinner ? this._winnerSection(winnerPlayers, winnerScoreField, photoSize) : ""}
           ${showLeaderboard ? `
           <section>
