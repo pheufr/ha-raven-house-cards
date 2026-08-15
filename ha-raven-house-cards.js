@@ -1808,6 +1808,10 @@
       this.innerHTML = this._renderIdle(s);
     }
     _remainingSeconds(state) {
+      if (state.state === "active" && state.attributes.finishes_at) {
+        const finishMs = new Date(state.attributes.finishes_at).getTime();
+        return Math.max(0, (finishMs - Date.now()) / 1e3);
+      }
       const remaining = state.attributes.remaining;
       if (!remaining) return 0;
       const parts = String(remaining).split(":").map(Number);
