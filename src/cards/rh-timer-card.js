@@ -177,6 +177,12 @@ class RHTimerCard extends HTMLElement {
   }
 
   _remainingSeconds(state) {
+    // When the timer is active, use finishes_at for a live countdown.
+    if (state.state === "active" && state.attributes.finishes_at) {
+      const finishMs = new Date(state.attributes.finishes_at).getTime();
+      return Math.max(0, (finishMs - Date.now()) / 1000);
+    }
+    // For paused / idle, fall back to the static remaining attribute.
     const remaining = state.attributes.remaining; // e.g. "0:05:00" or "0:00:30"
     if (!remaining) return 0;
     const parts = String(remaining).split(":").map(Number);
