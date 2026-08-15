@@ -1695,12 +1695,18 @@
       super();
       this._lastRenderKey = "";
       this._tickInterval = null;
-      this._completedAt = null;
-      this._dismissedEntityId = null;
+      this._completedAtByEntity = {};
+      this._dismissedEntityIds = /* @__PURE__ */ new Set();
+      this._prevStateByEntity = {};
+      this._displayEntityId = null;
     }
     setConfig(config) {
       if (!config || !config.entity) {
         throw new Error("rh-timer-card: 'entity' is required");
+      }
+      const entities = Array.isArray(config.entity) ? config.entity : [config.entity];
+      if (!entities.length) {
+        throw new Error("rh-timer-card: 'entity' must contain at least one timer entity id");
       }
       this._config = {
         quick_buttons: [
@@ -1714,30 +1720,69 @@
           { seconds: 0, color: "var(--error-color, #f44336)" }
         ],
         complete_color: "var(--error-color, #f44336)",
+        entity: entities,
         ...config
       };
+      this._config.entity = Array.isArray(this._config.entity) ? this._config.entity : [this._config.entity];
     }
     set hass(hass) {
       this._hass = hass;
-      const state = this._timerState();
-      if (state && state.state === "idle" && this._completedAt) {
-        if (this._dismissedEntityId === this._config.entity) {
-          this._completedAt = null;
-          this._dismissedEntityId = null;
+      const entityIds = this._entityIds();
+      for (const entityId of entityIds) {
+        const state = this._timerState(entityId);
+        const prevState = this._prevStateByEntity[entityId];
+        if (state) {
+          if (state.state === "idle" && (prevState === "active" || prevState === "paused")) {
+            if (!this._dismissedEntityIds.has(entityId) && !this._completedAtByEntity[entityId]) {
+              this._completedAtByEntity[entityId] = /* @__PURE__ */ new Date();
+            }
+          } else if (state.state === "active" || state.state === "paused") {
+            this._dismissedEntityIds.delete(entityId);
+            if (this._remainingSeconds(state) > 0) {
+              this._completedAtByEntity[entityId] = null;
+            }
+          }
+          this._prevStateByEntity[entityId] = state.state;
+        } else {
+          this._prevStateByEntity[entityId] = null;
+          this._completedAtByEntity[entityId] = null;
+          this._dismissedEntityIds.delete(entityId);
         }
       }
       this._scheduleRender();
     }
-    _timerState() {
+    _entityIds() {
+      if (!this._config) return [];
+      return Array.isArray(this._config.entity) ? this._config.entity : [this._config.entity];
+    }
+    _primaryEntityId() {
+      const entityIds = this._entityIds();
+      return entityIds[0] || null;
+    }
+    _timerState(entityId) {
       if (!this._hass || !this._config) return null;
-      return this._hass.states[this._config.entity] || null;
+      return this._hass.states[entityId] || null;
+    }
+    _timerStates() {
+      return this._entityIds().map((entityId) => ({ entityId, state: this._timerState(entityId) })).filter((entry) => !!entry.state);
     }
     _buildRenderKey() {
-      const s = this._timerState();
-      if (!s) return "missing";
       const now = Math.floor(Date.now() / 1e3);
-      const elapsed = this._completedAt ? Math.floor((Date.now() - this._completedAt) / 1e3) : 0;
-      return `${s.state}|${s.attributes.remaining || ""}|${now}|${elapsed}`;
+      const entityIds = this._entityIds();
+      if (!entityIds.length) return "missing";
+      const chunks = [];
+      for (const entityId of entityIds) {
+        const s = this._timerState(entityId);
+        if (!s) {
+          chunks.push(`${entityId}|missing`);
+          continue;
+        }
+        const elapsed = this._completedAtByEntity[entityId] ? Math.floor((Date.now() - this._completedAtByEntity[entityId]) / 1e3) : 0;
+        chunks.push(
+          `${entityId}|${s.state}|${s.attributes.remaining || ""}|${s.attributes.finishes_at || ""}|${elapsed}|${this._dismissedEntityIds.has(entityId)}`
+        );
+      }
+      return `${chunks.join("||")}|${now}`;
     }
     _scheduleRender() {
       const key = this._buildRenderKey();
@@ -1769,43 +1814,52 @@
     }
     // ─── rendering ────────────────────────────────────────────────────────────
     _render() {
-      const s = this._timerState();
-      if (!s) {
+      const entries = this._timerStates();
+      if (!entries.length) {
         this._stopTick();
         this.innerHTML = this._renderMissing();
         return;
       }
-      const timerState = s.state;
-      if (timerState === "idle" && this._completedAt && this._dismissedEntityId !== this._config.entity) {
+      const activeEntries = entries.filter((entry) => entry.state.state === "active" || entry.state.state === "paused");
+      const completeEntries = entries.filter(
+        (entry) => entry.state.state === "idle" && this._completedAtByEntity[entry.entityId] && !this._dismissedEntityIds.has(entry.entityId)
+      );
+      if (activeEntries.length > 1) {
         this._startTick();
-        this.innerHTML = this._renderComplete();
+        this._displayEntityId = null;
+        this.innerHTML = this._renderMultiActive(activeEntries);
         return;
       }
-      if (timerState === "active" || timerState === "paused") {
-        if (this._dismissedEntityId === this._config.entity) {
-          this._dismissedEntityId = null;
-          this._completedAt = null;
-        }
-        const remaining = this._remainingSeconds(s);
-        if (remaining <= 0 && timerState === "active") {
-          if (!this._completedAt) {
-            this._completedAt = /* @__PURE__ */ new Date();
+      if (activeEntries.length === 1) {
+        const activeEntry = activeEntries[0];
+        const remaining = this._remainingSeconds(activeEntry.state);
+        if (remaining <= 0 && activeEntry.state.state === "active") {
+          if (!this._completedAtByEntity[activeEntry.entityId]) {
+            this._completedAtByEntity[activeEntry.entityId] = /* @__PURE__ */ new Date();
           }
+          this._displayEntityId = activeEntry.entityId;
           this._startTick();
-          this.innerHTML = this._renderComplete();
+          this.innerHTML = this._renderComplete(activeEntry.entityId);
           return;
         }
-        this._completedAt = null;
+        this._displayEntityId = activeEntry.entityId;
         this._startTick();
-        this.innerHTML = this._renderActive(s, remaining, timerState === "paused");
+        this.innerHTML = this._renderActive(activeEntry.state, remaining, activeEntry.state.state === "paused");
         return;
       }
-      if (this._completedAt && this._dismissedEntityId === this._config.entity) {
-        this._completedAt = null;
-        this._dismissedEntityId = null;
+      if (completeEntries.length) {
+        const primaryEntity2 = this._primaryEntityId();
+        const selected = completeEntries.find((entry) => entry.entityId === primaryEntity2) || completeEntries[0];
+        this._displayEntityId = selected.entityId;
+        this._startTick();
+        this.innerHTML = this._renderComplete(selected.entityId);
+        return;
       }
+      const primaryEntity = this._primaryEntityId();
+      const idleEntry = entries.find((entry) => entry.entityId === primaryEntity) || entries[0];
+      this._displayEntityId = idleEntry.entityId;
       this._stopTick();
-      this.innerHTML = this._renderIdle(s);
+      this.innerHTML = this._renderIdle(idleEntry.state);
     }
     _remainingSeconds(state) {
       if (state.state === "active" && state.attributes.finishes_at) {
@@ -1868,7 +1922,7 @@
       return `M ${startX} ${startY} A ${r} ${r} 0 ${largeArc} 1 ${endX.toFixed(3)} ${endY.toFixed(3)}`;
     }
     _friendlyName(state) {
-      return state.attributes.friendly_name || this._config.entity;
+      return state.attributes.friendly_name || state.entity_id;
     }
     _cardTitle(state) {
       if (this._config.title !== void 0) return this._config.title;
@@ -1932,11 +1986,12 @@
     `;
     }
     // ─── complete view ────────────────────────────────────────────────────────
-    _renderComplete() {
-      const state = this._timerState();
+    _renderComplete(entityId) {
+      const state = this._timerState(entityId);
       const title = state ? this._cardTitle(state) : "";
       const color = this._config.complete_color || "var(--error-color, #f44336)";
-      const elapsedSec = this._completedAt ? Math.floor((Date.now() - this._completedAt) / 1e3) : 0;
+      const completedAt = this._completedAtByEntity[entityId];
+      const elapsedSec = completedAt ? Math.floor((Date.now() - completedAt) / 1e3) : 0;
       const elapsedText = this._formatTime(elapsedSec);
       return `
       <ha-card${title ? ` header="${title}"` : ""}>
@@ -1957,12 +2012,52 @@
       </ha-card>
     `;
     }
+    _renderMultiActive(entries) {
+      const title = this._config.title !== void 0 ? this._config.title : "";
+      const trackColor = "var(--divider-color, rgba(128,128,128,0.2))";
+      const items = entries.map((entry) => {
+        const remaining = this._remainingSeconds(entry.state);
+        const duration = this._durationSeconds(entry.state) || remaining;
+        const fraction = duration > 0 ? remaining / duration : 1;
+        const paused = entry.state.state === "paused";
+        const arcColor = paused ? "var(--disabled-color, rgba(128,128,128,0.5))" : this._arcColor(remaining);
+        const arcPath = this._arcPath(fraction);
+        return `
+          <div style="display:flex;flex-direction:column;align-items:center;gap:8px;min-width:150px;">
+            <div style="position:relative;width:150px;height:150px;">
+              <svg viewBox="0 0 200 200" width="150" height="150" style="display:block;">
+                <circle cx="100" cy="100" r="90" fill="none" stroke="${trackColor}" stroke-width="12"/>
+                <path d="${arcPath}" fill="none" stroke="${arcColor}" stroke-width="12" stroke-linecap="round"/>
+              </svg>
+              <div style="position:absolute;inset:0;display:flex;flex-direction:column;
+                align-items:center;justify-content:center;gap:4px;pointer-events:none;">
+                <div style="font-size:28px;font-weight:800;line-height:1;color:${arcColor};">
+                  ${this._formatTime(remaining)}
+                </div>
+                ${paused ? `<div style="font-size:11px;opacity:0.6;text-transform:uppercase;letter-spacing:0.1em;">Paused</div>` : ""}
+              </div>
+            </div>
+            <div style="font-size:13px;opacity:0.8;text-align:center;line-height:1.2;">
+              ${this._friendlyName(entry.state)}
+            </div>
+          </div>
+        `;
+      }).join("");
+      return `
+      <ha-card${title ? ` header="${title}"` : ""}>
+        <div style="display:flex;gap:12px;overflow-x:auto;padding:18px 16px 16px;align-items:flex-start;">
+          ${items}
+        </div>
+      </ha-card>
+    `;
+    }
     // ─── missing entity ────────────────────────────────────────────────────────
     _renderMissing() {
+      const entity = this._primaryEntityId() || "";
       return `
       <ha-card>
         <div style="padding:20px;opacity:0.6;font-size:14px;">
-          Timer entity not found: ${this._config ? this._config.entity : ""}
+          Timer entity not found: ${entity}
         </div>
       </ha-card>
     `;
@@ -1972,18 +2067,22 @@
       const quickBtn = e.target.closest(".rh-timer-quick");
       if (quickBtn) {
         const duration = quickBtn.dataset.duration;
+        const entityId = this._primaryEntityId();
+        if (!entityId) return;
         this._hass.callService("timer", "start", {
-          entity_id: this._config.entity,
+          entity_id: entityId,
           duration
         });
         return;
       }
       const completeArea = e.target.closest(".rh-timer-complete-area");
       if (completeArea) {
-        this._dismissedEntityId = this._config.entity;
-        this._completedAt = null;
+        const entityId = this._displayEntityId || this._primaryEntityId();
+        if (!entityId) return;
+        this._dismissedEntityIds.add(entityId);
+        this._completedAtByEntity[entityId] = null;
         this._hass.callService("timer", "cancel", {
-          entity_id: this._config.entity
+          entity_id: entityId
         });
         this._lastRenderKey = "";
         this._render();

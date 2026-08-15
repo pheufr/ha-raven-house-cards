@@ -13,7 +13,7 @@
  *
  * Configuration
  * ─────────────────────────────────────────────────────────────
- * entity          (required) – timer entity id
+ * entity          (required) – timer entity id or array of timer entity ids
  * title           – optional card header text  (default: entity friendly_name)
  * color           – base foreground colour      (default: auto via CSS vars)
  * quick_buttons   – array of objects { label, duration } for idle buttons
@@ -29,13 +29,19 @@ class RHTimerCard extends HTMLElement {
     super();
     this._lastRenderKey = "";
     this._tickInterval = null;
-    this._completedAt = null; // local Date when we first detected completion
-    this._dismissedEntityId = null; // track which entity was dismissed
+    this._completedAtByEntity = {}; // local Date when completion was first detected
+    this._dismissedEntityIds = new Set(); // entities dismissed in complete mode
+    this._prevStateByEntity = {}; // previous HA state by entity id
+    this._displayEntityId = null; // entity currently rendered in single-timer views
   }
 
   setConfig(config) {
     if (!config || !config.entity) {
       throw new Error("rh-timer-card: 'entity' is required");
+    }
+    const entities = Array.isArray(config.entity) ? config.entity : [config.entity];
+    if (!entities.length) {
+      throw new Error("rh-timer-card: 'entity' must contain at least one timer entity id");
     }
     this._config = {
       quick_buttons: [
@@ -49,38 +55,81 @@ class RHTimerCard extends HTMLElement {
         { seconds: 0, color: "var(--error-color, #f44336)" },
       ],
       complete_color: "var(--error-color, #f44336)",
+      entity: entities,
       ...config,
     };
+    this._config.entity = Array.isArray(this._config.entity) ? this._config.entity : [this._config.entity];
   }
 
   set hass(hass) {
     this._hass = hass;
-    const state = this._timerState();
+    const entityIds = this._entityIds();
+    for (const entityId of entityIds) {
+      const state = this._timerState(entityId);
+      const prevState = this._prevStateByEntity[entityId];
 
-    // Detect transition to complete so we record the local time once.
-    if (state && state.state === "idle" && this._completedAt) {
-      // Timer cancelled externally – clear our local completed state too.
-      if (this._dismissedEntityId === this._config.entity) {
-        this._completedAt = null;
-        this._dismissedEntityId = null;
+      if (state) {
+        if (state.state === "idle" && (prevState === "active" || prevState === "paused")) {
+          if (!this._dismissedEntityIds.has(entityId) && !this._completedAtByEntity[entityId]) {
+            this._completedAtByEntity[entityId] = new Date();
+          }
+        } else if (state.state === "active" || state.state === "paused") {
+          this._dismissedEntityIds.delete(entityId);
+          if (this._remainingSeconds(state) > 0) {
+            this._completedAtByEntity[entityId] = null;
+          }
+        }
+        this._prevStateByEntity[entityId] = state.state;
+      } else {
+        this._prevStateByEntity[entityId] = null;
+        this._completedAtByEntity[entityId] = null;
+        this._dismissedEntityIds.delete(entityId);
       }
     }
 
     this._scheduleRender();
   }
 
-  _timerState() {
+  _entityIds() {
+    if (!this._config) return [];
+    return Array.isArray(this._config.entity) ? this._config.entity : [this._config.entity];
+  }
+
+  _primaryEntityId() {
+    const entityIds = this._entityIds();
+    return entityIds[0] || null;
+  }
+
+  _timerState(entityId) {
     if (!this._hass || !this._config) return null;
-    return this._hass.states[this._config.entity] || null;
+    return this._hass.states[entityId] || null;
+  }
+
+  _timerStates() {
+    return this._entityIds()
+      .map((entityId) => ({ entityId, state: this._timerState(entityId) }))
+      .filter((entry) => !!entry.state);
   }
 
   _buildRenderKey() {
-    const s = this._timerState();
-    if (!s) return "missing";
-    // Include seconds so the key changes each second when active.
     const now = Math.floor(Date.now() / 1000);
-    const elapsed = this._completedAt ? Math.floor((Date.now() - this._completedAt) / 1000) : 0;
-    return `${s.state}|${s.attributes.remaining || ""}|${now}|${elapsed}`;
+    const entityIds = this._entityIds();
+    if (!entityIds.length) return "missing";
+    const chunks = [];
+    for (const entityId of entityIds) {
+      const s = this._timerState(entityId);
+      if (!s) {
+        chunks.push(`${entityId}|missing`);
+        continue;
+      }
+      const elapsed = this._completedAtByEntity[entityId]
+        ? Math.floor((Date.now() - this._completedAtByEntity[entityId]) / 1000)
+        : 0;
+      chunks.push(
+        `${entityId}|${s.state}|${s.attributes.remaining || ""}|${s.attributes.finishes_at || ""}|${elapsed}|${this._dismissedEntityIds.has(entityId)}`
+      );
+    }
+    return `${chunks.join("||")}|${now}`;
   }
 
   _scheduleRender() {
@@ -119,61 +168,59 @@ class RHTimerCard extends HTMLElement {
   // ─── rendering ────────────────────────────────────────────────────────────
 
   _render() {
-    const s = this._timerState();
-    if (!s) {
+    const entries = this._timerStates();
+    if (!entries.length) {
       this._stopTick();
       this.innerHTML = this._renderMissing();
       return;
     }
 
-    const timerState = s.state; // idle | active | paused
+    const activeEntries = entries.filter((entry) => entry.state.state === "active" || entry.state.state === "paused");
+    const completeEntries = entries.filter(
+      (entry) => entry.state.state === "idle" && this._completedAtByEntity[entry.entityId] && !this._dismissedEntityIds.has(entry.entityId)
+    );
 
-    // Check if HA says the timer just finished (idle after being active/paused
-    // but we haven't dismissed it yet).  We use finishes_at being in the past as
-    // the signal – if the timer just expired, finishes_at will equal "now".
-    // HA sets state → "idle" when a timer finishes; the only way to distinguish
-    // "naturally expired" vs "user cancelled" is through last_changed.  We use
-    // our local _completedAt flag instead to keep things simple: the first time
-    // we see the timer transition from active → idle we treat it as complete.
-    if (timerState === "idle" && this._completedAt && this._dismissedEntityId !== this._config.entity) {
+    if (activeEntries.length > 1) {
       this._startTick();
-      this.innerHTML = this._renderComplete();
+      this._displayEntityId = null;
+      this.innerHTML = this._renderMultiActive(activeEntries);
       return;
     }
 
-    if (timerState === "active" || timerState === "paused") {
-      // Clear any stale completion state for this entity
-      if (this._dismissedEntityId === this._config.entity) {
-        this._dismissedEntityId = null;
-        this._completedAt = null;
-      }
-
-      const remaining = this._remainingSeconds(s);
-      if (remaining <= 0 && timerState === "active") {
-        // Timer just hit zero – record completion time if not yet done.
-        if (!this._completedAt) {
-          this._completedAt = new Date();
+    if (activeEntries.length === 1) {
+      const activeEntry = activeEntries[0];
+      const remaining = this._remainingSeconds(activeEntry.state);
+      if (remaining <= 0 && activeEntry.state.state === "active") {
+        if (!this._completedAtByEntity[activeEntry.entityId]) {
+          this._completedAtByEntity[activeEntry.entityId] = new Date();
         }
+        this._displayEntityId = activeEntry.entityId;
         this._startTick();
-        this.innerHTML = this._renderComplete();
+        this.innerHTML = this._renderComplete(activeEntry.entityId);
         return;
       }
-
-      // Reset completion state if somehow we're active again with time remaining
-      this._completedAt = null;
+      this._displayEntityId = activeEntry.entityId;
       this._startTick();
-      this.innerHTML = this._renderActive(s, remaining, timerState === "paused");
+      this.innerHTML = this._renderActive(activeEntry.state, remaining, activeEntry.state.state === "paused");
       return;
     }
 
-    // idle – clear completion tracking when dismissed (entity back to clean idle)
-    if (this._completedAt && this._dismissedEntityId === this._config.entity) {
-      this._completedAt = null;
-      this._dismissedEntityId = null;
+    if (completeEntries.length) {
+      const primaryEntity = this._primaryEntityId();
+      const selected =
+        completeEntries.find((entry) => entry.entityId === primaryEntity) ||
+        completeEntries[0];
+      this._displayEntityId = selected.entityId;
+      this._startTick();
+      this.innerHTML = this._renderComplete(selected.entityId);
+      return;
     }
 
+    const primaryEntity = this._primaryEntityId();
+    const idleEntry = entries.find((entry) => entry.entityId === primaryEntity) || entries[0];
+    this._displayEntityId = idleEntry.entityId;
     this._stopTick();
-    this.innerHTML = this._renderIdle(s);
+    this.innerHTML = this._renderIdle(idleEntry.state);
   }
 
   _remainingSeconds(state) {
@@ -247,7 +294,7 @@ class RHTimerCard extends HTMLElement {
   }
 
   _friendlyName(state) {
-    return state.attributes.friendly_name || this._config.entity;
+    return state.attributes.friendly_name || state.entity_id;
   }
 
   _cardTitle(state) {
@@ -326,12 +373,13 @@ class RHTimerCard extends HTMLElement {
 
   // ─── complete view ────────────────────────────────────────────────────────
 
-  _renderComplete() {
-    const state = this._timerState();
+  _renderComplete(entityId) {
+    const state = this._timerState(entityId);
     const title = state ? this._cardTitle(state) : "";
     const color = this._config.complete_color || "var(--error-color, #f44336)";
-    const elapsedSec = this._completedAt
-      ? Math.floor((Date.now() - this._completedAt) / 1000)
+    const completedAt = this._completedAtByEntity[entityId];
+    const elapsedSec = completedAt
+      ? Math.floor((Date.now() - completedAt) / 1000)
       : 0;
     const elapsedText = this._formatTime(elapsedSec);
 
@@ -355,13 +403,59 @@ class RHTimerCard extends HTMLElement {
     `;
   }
 
+  _renderMultiActive(entries) {
+    const title = this._config.title !== undefined ? this._config.title : "";
+    const trackColor = "var(--divider-color, rgba(128,128,128,0.2))";
+    const items = entries
+      .map((entry) => {
+        const remaining = this._remainingSeconds(entry.state);
+        const duration = this._durationSeconds(entry.state) || remaining;
+        const fraction = duration > 0 ? remaining / duration : 1;
+        const paused = entry.state.state === "paused";
+        const arcColor = paused
+          ? "var(--disabled-color, rgba(128,128,128,0.5))"
+          : this._arcColor(remaining);
+        const arcPath = this._arcPath(fraction);
+        return `
+          <div style="display:flex;flex-direction:column;align-items:center;gap:8px;min-width:150px;">
+            <div style="position:relative;width:150px;height:150px;">
+              <svg viewBox="0 0 200 200" width="150" height="150" style="display:block;">
+                <circle cx="100" cy="100" r="90" fill="none" stroke="${trackColor}" stroke-width="12"/>
+                <path d="${arcPath}" fill="none" stroke="${arcColor}" stroke-width="12" stroke-linecap="round"/>
+              </svg>
+              <div style="position:absolute;inset:0;display:flex;flex-direction:column;
+                align-items:center;justify-content:center;gap:4px;pointer-events:none;">
+                <div style="font-size:28px;font-weight:800;line-height:1;color:${arcColor};">
+                  ${this._formatTime(remaining)}
+                </div>
+                ${paused ? `<div style="font-size:11px;opacity:0.6;text-transform:uppercase;letter-spacing:0.1em;">Paused</div>` : ""}
+              </div>
+            </div>
+            <div style="font-size:13px;opacity:0.8;text-align:center;line-height:1.2;">
+              ${this._friendlyName(entry.state)}
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+
+    return `
+      <ha-card${title ? ` header="${title}"` : ""}>
+        <div style="display:flex;gap:12px;overflow-x:auto;padding:18px 16px 16px;align-items:flex-start;">
+          ${items}
+        </div>
+      </ha-card>
+    `;
+  }
+
   // ─── missing entity ────────────────────────────────────────────────────────
 
   _renderMissing() {
+    const entity = this._primaryEntityId() || "";
     return `
       <ha-card>
         <div style="padding:20px;opacity:0.6;font-size:14px;">
-          Timer entity not found: ${this._config ? this._config.entity : ""}
+          Timer entity not found: ${entity}
         </div>
       </ha-card>
     `;
@@ -374,8 +468,10 @@ class RHTimerCard extends HTMLElement {
     const quickBtn = e.target.closest(".rh-timer-quick");
     if (quickBtn) {
       const duration = quickBtn.dataset.duration;
+      const entityId = this._primaryEntityId();
+      if (!entityId) return;
       this._hass.callService("timer", "start", {
-        entity_id: this._config.entity,
+        entity_id: entityId,
         duration,
       });
       return;
@@ -384,10 +480,12 @@ class RHTimerCard extends HTMLElement {
     // Dismiss complete state
     const completeArea = e.target.closest(".rh-timer-complete-area");
     if (completeArea) {
-      this._dismissedEntityId = this._config.entity;
-      this._completedAt = null;
+      const entityId = this._displayEntityId || this._primaryEntityId();
+      if (!entityId) return;
+      this._dismissedEntityIds.add(entityId);
+      this._completedAtByEntity[entityId] = null;
       this._hass.callService("timer", "cancel", {
-        entity_id: this._config.entity,
+        entity_id: entityId,
       });
       this._lastRenderKey = "";
       this._render();
