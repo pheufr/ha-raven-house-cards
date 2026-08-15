@@ -10,6 +10,7 @@ Cards included:
 - `rh-quiz-master-card`
 - `rh-quiz-round-card`
 - `rh-soundboard-card`
+- `rh-timer-card`
 
 These cards consume entities/services provided by the backend integration repository `ha-raven-house` (`raven_house_tools`).
 
@@ -190,6 +191,32 @@ Clip fields:
 - `media`: media-source or URL/path to an audio file
 - `fg_color`: optional per-button foreground/text color
 - `bg_color`: optional per-button background color
+
+### RH Timer
+
+```yaml
+type: custom:rh-timer-card
+title: Kitchen Timers
+entity:
+  - timer.kitchen
+  - timer.utility
+default_entity: timer.utility
+quick_buttons:
+  - label: 1m
+    duration: "00:01:00"
+  - label: 5m
+    duration: "00:05:00"
+```
+
+Timer settings:
+
+- `entity` (string or string array, optional): Timer entity or entities to show. When omitted, the card discovers all `timer.*` entities automatically.
+- `default_entity` (string, required when `entity` is omitted): Timer used for quick-start buttons and preferred single-timer display. When `entity` is provided, `default_entity` must match it or be included in the list.
+- `title` (string, default `friendly_name` of the selected timer): Card header. Use `""` to hide the header.
+- `color` (string, default theme primary color): Base countdown color while above thresholds.
+- `quick_buttons` (array): Idle-state quick-start buttons in `{ label, duration }` form.
+- `thresholds` (array): Countdown color thresholds in `{ seconds, color }` form, checked from highest `seconds` to lowest.
+- `complete_color` (string, default theme error color): Color used when the timer is complete.
 
 ### RH Notes
 
