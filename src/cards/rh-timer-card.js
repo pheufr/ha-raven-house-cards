@@ -118,10 +118,10 @@ class RHTimerCard extends HTMLElement {
     }
     return Object.entries(this._hass?.states || {})
       .filter(([entityId]) => entityId.startsWith("timer."))
-      .sort(([, a], [, b]) => {
-        const aName = a?.attributes?.friendly_name || a?.entity_id || "";
-        const bName = b?.attributes?.friendly_name || b?.entity_id || "";
-        return aName.localeCompare(bName) || (a?.entity_id || "").localeCompare(b?.entity_id || "");
+      .sort(([aEntityId, a], [bEntityId, b]) => {
+        const aName = a?.attributes?.friendly_name || aEntityId;
+        const bName = b?.attributes?.friendly_name || bEntityId;
+        return aName.localeCompare(bName) || aEntityId.localeCompare(bEntityId);
       })
       .map(([entityId]) => entityId);
   }

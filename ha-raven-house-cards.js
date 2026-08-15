@@ -1701,12 +1701,20 @@
       this._displayEntityId = null;
     }
     setConfig(config) {
-      if (!config || !config.entity) {
-        throw new Error("rh-timer-card: 'entity' is required");
-      }
-      const entities = Array.isArray(config.entity) ? config.entity : [config.entity];
-      if (!entities.length) {
-        throw new Error("rh-timer-card: 'entity' must contain at least one timer entity id");
+      const safeConfig = config && typeof config === "object" ? config : {};
+      const hasEntity = safeConfig.entity !== void 0 && safeConfig.entity !== null;
+      const defaultEntity = typeof safeConfig.default_entity === "string" ? safeConfig.default_entity.trim() : safeConfig.default_entity;
+      let entities;
+      if (hasEntity) {
+        entities = (Array.isArray(safeConfig.entity) ? safeConfig.entity : [safeConfig.entity]).map((entityId) => typeof entityId === "string" ? entityId.trim() : entityId).filter(Boolean);
+        if (!entities.length) {
+          throw new Error("rh-timer-card: 'entity' must contain at least one timer entity id");
+        }
+        if (defaultEntity && !entities.includes(defaultEntity)) {
+          throw new Error("rh-timer-card: 'default_entity' must match 'entity' or be included in the 'entity' list");
+        }
+      } else if (!defaultEntity) {
+        throw new Error("rh-timer-card: 'default_entity' is required when 'entity' is not defined");
       }
       this._config = {
         quick_buttons: [
@@ -1720,10 +1728,16 @@
           { seconds: 0, color: "var(--error-color, #f44336)" }
         ],
         complete_color: "var(--error-color, #f44336)",
-        entity: entities,
-        ...config
+        ...safeConfig
       };
-      this._config.entity = Array.isArray(this._config.entity) ? this._config.entity : [this._config.entity];
+      if (hasEntity) {
+        this._config.entity = entities;
+      } else {
+        delete this._config.entity;
+      }
+      if (defaultEntity) {
+        this._config.default_entity = defaultEntity;
+      }
     }
     set hass(hass) {
       this._hass = hass;
@@ -1753,11 +1767,17 @@
     }
     _entityIds() {
       if (!this._config) return [];
-      return Array.isArray(this._config.entity) ? this._config.entity : [this._config.entity];
+      if (Array.isArray(this._config.entity) && this._config.entity.length) {
+        return this._config.entity;
+      }
+      return Object.entries(this._hass?.states || {}).filter(([entityId]) => entityId.startsWith("timer.")).sort(([aEntityId, a], [bEntityId, b]) => {
+        const aName = a?.attributes?.friendly_name || aEntityId;
+        const bName = b?.attributes?.friendly_name || bEntityId;
+        return aName.localeCompare(bName) || aEntityId.localeCompare(bEntityId);
+      }).map(([entityId]) => entityId);
     }
     _primaryEntityId() {
-      const entityIds = this._entityIds();
-      return entityIds[0] || null;
+      return this._config?.default_entity || this._entityIds()[0] || null;
     }
     _timerState(entityId) {
       if (!this._hass || !this._config) return null;
@@ -1990,23 +2010,25 @@
       const state = this._timerState(entityId);
       const title = state ? this._cardTitle(state) : "";
       const color = this._config.complete_color || "var(--error-color, #f44336)";
+      const trackColor = "var(--divider-color, rgba(128,128,128,0.2))";
       const completedAt = this._completedAtByEntity[entityId];
       const elapsedSec = completedAt ? Math.floor((Date.now() - completedAt) / 1e3) : 0;
       const elapsedText = this._formatTime(elapsedSec);
       return `
       <ha-card${title ? ` header="${title}"` : ""}>
         <div class="rh-timer-complete-area"
-          style="display:flex;flex-direction:column;align-items:center;justify-content:center;
-            padding:28px 16px;gap:10px;cursor:pointer;aspect-ratio:1 / 1;
-            background:${color}1a;border-radius:var(--ha-card-border-radius,12px);">
-          <div style="width:160px;height:160px;border-radius:50%;
-            background:${color}22;border:8px solid ${color};
-            display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;">
-            <div style="font-size:26px;font-weight:800;color:${color};line-height:1;">Complete</div>
-            <div style="font-size:18px;font-weight:600;color:${color};opacity:0.85;">${elapsedText}</div>
-          </div>
-          <div style="font-size:11px;opacity:0.55;text-transform:uppercase;letter-spacing:0.1em;">
-            Tap to dismiss
+          style="display:flex;align-items:center;justify-content:center;padding:20px 16px;cursor:pointer;">
+          <div style="position:relative;width:200px;height:200px;">
+            <svg viewBox="0 0 200 200" width="200" height="200" style="display:block;">
+              <circle cx="100" cy="100" r="84" fill="${color}12"/>
+              <circle cx="100" cy="100" r="90" fill="none" stroke="${trackColor}" stroke-width="12"/>
+              <circle cx="100" cy="100" r="90" fill="none" stroke="${color}" stroke-width="12"/>
+            </svg>
+            <div style="position:absolute;inset:0;display:flex;flex-direction:column;
+              align-items:center;justify-content:center;gap:6px;pointer-events:none;">
+              <div style="font-size:30px;font-weight:800;color:${color};line-height:1;">Complete</div>
+              <div style="font-size:18px;font-weight:600;color:${color};opacity:0.85;line-height:1;">${elapsedText}</div>
+            </div>
           </div>
         </div>
       </ha-card>
@@ -2053,6 +2075,15 @@
     }
     // ─── missing entity ────────────────────────────────────────────────────────
     _renderMissing() {
+      if (!this._config?.entity) {
+        return `
+        <ha-card>
+          <div style="padding:20px;opacity:0.6;font-size:14px;">
+            No timer entities found
+          </div>
+        </ha-card>
+      `;
+      }
       const entity = this._primaryEntityId() || "";
       return `
       <ha-card>
