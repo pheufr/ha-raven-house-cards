@@ -236,6 +236,52 @@ Notes settings:
 
 The card stays transparent apart from the header and the note text itself, and it automatically reflects entity state changes.
 
+### RH Map
+
+Renders a GPS route from a polyline-encoded entity as an SVG path overlaid on an optional tile-map background.  Supports template strings in `primary`, `secondary`, and `icon` — any valid Home Assistant Jinja2 expression works, including conditionals and filters.
+
+```yaml
+type: custom:rh-map-card
+entity: sensor.last_workout
+polyline_attribute: route_polyline
+title: Last Workout
+color: "#e06c00"
+zoom: 14
+icon: >-
+  {% if is_state_attr('sensor.last_workout', 'activity_type', 'strength_training') %}
+    mdi:dumbbell
+  {% else %}
+    mdi:run
+  {% endif %}
+primary: >-
+  {% if is_state_attr('sensor.last_workout', 'activity_type', 'strength_training') %}
+    {{ state_attr('sensor.last_workout', 'total_sets') }} sets · {{ state_attr('sensor.last_workout', 'total_reps') }} reps
+  {% else %}
+    {{ state_attr('sensor.last_workout', 'pace') }} /km
+  {% endif %}
+secondary: >-
+  {% if is_state_attr('sensor.last_workout', 'activity_type', 'strength_training') %}
+    {{ state_attr('sensor.last_workout', 'duration') }}
+  {% else %}
+    {{ state_attr('sensor.last_workout', 'distance') }} km · {{ state_attr('sensor.last_workout', 'duration') }}
+  {% endif %}
+```
+
+Map card settings:
+
+- `entity` (string, **required**): Entity whose state (or a named attribute) holds the encoded polyline string.
+- `polyline_attribute` (string): Attribute name to read the polyline from.  Omit to use the entity state directly.
+- `title` (string): Card header.  Use `""` to suppress.
+- `color` / `fg_color` (string, default theme primary color): Route and text colour.
+- `route_width` (number, default `3`): Stroke width of the route line.
+- `show_map` (boolean, default `true`): Whether to render the tile-map background.
+- `map_tile_url` (string, default OpenStreetMap): Tile server URL template with `{z}`, `{x}`, `{y}` placeholders.
+- `zoom` (number, default `13`): Tile zoom level for the background map.
+- `bg_color` (string): Explicit card background colour (only used when `show_map` is `false`).
+- `icon` (string): MDI icon name, e.g. `mdi:run`.  Supports templates.
+- `primary` (string): Primary text displayed above the map.  Supports full Jinja2 templates.
+- `secondary` (string): Secondary text displayed below the primary text.  Supports full Jinja2 templates.
+
 ## Example Dashboard
 
 See `examples/quiz-tv-dashboard.yaml` for a larger dashboard example.
