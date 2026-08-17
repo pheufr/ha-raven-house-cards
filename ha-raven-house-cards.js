@@ -2135,4 +2135,341 @@
       description: "Circular countdown timer with arc gauge and quick-start buttons"
     });
   }
+
+  // src/cards/rh-map-card.js
+  var RHMapCard = class extends HTMLElement {
+    constructor() {
+      super();
+      this._lastRenderKey = "";
+      this._tileCache = /* @__PURE__ */ new Map();
+      this._pendingTiles = /* @__PURE__ */ new Set();
+      this._mapCanvas = null;
+      this._mapCtx = null;
+      this._currentPolyline = "";
+      this._currentZoom = 13;
+      this._currentBounds = null;
+      this._rafPending = false;
+    }
+    // ─── lifecycle ────────────────────────────────────────────────────────────
+    setConfig(config) {
+      const safe = config && typeof config === "object" ? config : {};
+      if (!safe.entity) {
+        throw new Error("rh-map-card: 'entity' is required");
+      }
+      this._config = {
+        show_map: safe.show_map !== false,
+        zoom: Number(safe.zoom) > 0 ? Number(safe.zoom) : 13,
+        route_width: Number(safe.route_width) > 0 ? Number(safe.route_width) : 3,
+        map_tile_url: typeof safe.map_tile_url === "string" ? safe.map_tile_url : "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        ...safe
+      };
+    }
+    set hass(hass) {
+      this._hass = hass;
+      const key = this._buildRenderKey();
+      if (key === this._lastRenderKey) return;
+      this._lastRenderKey = key;
+      this._render();
+    }
+    connectedCallback() {
+      if (this._lastRenderKey && this._hass) {
+        this._render();
+      }
+    }
+    // ─── config helpers ───────────────────────────────────────────────────────
+    _fgColor() {
+      return this._config?.color || this._config?.fg_color || "var(--primary-color, #03a9f4)";
+    }
+    _entityState() {
+      return this._hass?.states?.[this._config.entity] || null;
+    }
+    _polylineString() {
+      const state = this._entityState();
+      if (!state) return "";
+      if (this._config.polyline_attribute) {
+        return String(state.attributes?.[this._config.polyline_attribute] || "");
+      }
+      return String(state.state || "");
+    }
+    // ─── template evaluation ──────────────────────────────────────────────────
+    _evalTemplate(tmpl) {
+      if (typeof tmpl !== "string" || !tmpl.trim()) return "";
+      return tmpl.replace(/\{\{\s*([\s\S]+?)\s*\}\}/g, (_, expr) => {
+        const statesMatch = expr.match(/^states\(\s*['"]([^'"]+)['"]\s*\)$/);
+        if (statesMatch) {
+          return this._hass?.states?.[statesMatch[1]]?.state ?? "";
+        }
+        const attrMatch = expr.match(
+          /^state_attr\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)$/
+        );
+        if (attrMatch) {
+          return this._hass?.states?.[attrMatch[1]]?.attributes?.[attrMatch[2]] ?? "";
+        }
+        return `{{ ${expr} }}`;
+      });
+    }
+    // ─── polyline decoding (Google Encoded Polyline Algorithm) ────────────────
+    _decodePolyline(encoded) {
+      if (!encoded) return [];
+      const coords = [];
+      let index = 0;
+      let lat = 0;
+      let lng = 0;
+      while (index < encoded.length) {
+        let b;
+        let shift = 0;
+        let result = 0;
+        do {
+          b = encoded.charCodeAt(index++) - 63;
+          result |= (b & 31) << shift;
+          shift += 5;
+        } while (b >= 32);
+        const dlat = result & 1 ? ~(result >> 1) : result >> 1;
+        lat += dlat;
+        shift = 0;
+        result = 0;
+        do {
+          b = encoded.charCodeAt(index++) - 63;
+          result |= (b & 31) << shift;
+          shift += 5;
+        } while (b >= 32);
+        const dlng = result & 1 ? ~(result >> 1) : result >> 1;
+        lng += dlng;
+        coords.push([lat / 1e5, lng / 1e5]);
+      }
+      return coords;
+    }
+    // ─── Mercator tile maths ──────────────────────────────────────────────────
+    _latLngToTile(lat, lng, zoom) {
+      const n = Math.pow(2, zoom);
+      const x = (lng + 180) / 360 * n;
+      const latRad = lat * Math.PI / 180;
+      const y = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n;
+      return { x, y };
+    }
+    _tileToLatLng(tx, ty, zoom) {
+      const n = Math.pow(2, zoom);
+      const lng = tx / n * 360 - 180;
+      const latRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * ty / n)));
+      const lat = latRad * 180 / Math.PI;
+      return { lat, lng };
+    }
+    // ─── render key ───────────────────────────────────────────────────────────
+    _buildRenderKey() {
+      const state = this._entityState();
+      const attrs = state?.attributes || {};
+      return [
+        this._config?.entity,
+        this._config?.polyline_attribute ? attrs[this._config.polyline_attribute] : state?.state,
+        this._evalTemplate(this._config?.primary),
+        this._evalTemplate(this._config?.secondary),
+        this._config?.icon,
+        this._config?.show_map,
+        this._fgColor(),
+        this._config?.bg_color,
+        this._config?.zoom
+      ].join("~");
+    }
+    // ─── main render ──────────────────────────────────────────────────────────
+    _render() {
+      const color = this._fgColor();
+      const polylineStr = this._polylineString();
+      const coords = this._decodePolyline(polylineStr);
+      const showMap = this._config.show_map !== false;
+      const icon = typeof this._config.icon === "string" ? this._config.icon.trim() : "";
+      const primary = this._evalTemplate(this._config.primary);
+      const secondary = this._evalTemplate(this._config.secondary);
+      const title = this._config.title;
+      const headerAttr = title !== void 0 && title !== "" ? ` header="${title}"` : "";
+      const noBg = !showMap && !this._config.bg_color;
+      const cardStyle = noBg ? "background:transparent;box-shadow:none;border:none;" : this._config.bg_color ? `background:${this._config.bg_color};` : "";
+      const iconHtml = icon ? `<div style="display:flex;justify-content:center;align-items:center;margin-bottom:8px;">
+           <ha-icon icon="${icon}" style="--mdi-icon-size:32px;color:${color};"></ha-icon>
+         </div>` : "";
+      const primaryHtml = primary ? `<div style="font-size:22px;font-weight:800;color:${color};text-align:center;line-height:1.2;margin-bottom:2px;">${primary}</div>` : "";
+      const secondaryHtml = secondary ? `<div style="font-size:14px;font-weight:600;color:${color};text-align:center;opacity:0.75;line-height:1.2;">${secondary}</div>` : "";
+      const textBlock = primaryHtml || secondaryHtml ? `<div style="padding:10px 12px 0;display:flex;flex-direction:column;align-items:center;gap:2px;">
+           ${iconHtml}${primaryHtml}${secondaryHtml}
+         </div>` : iconHtml ? `<div style="padding:10px 12px 0;">${iconHtml}</div>` : "";
+      const svgRoute = this._buildRouteSvg(coords, color);
+      const mapContainerId = `rh-map-${this._config.entity.replace(/[^a-z0-9]/gi, "_")}`;
+      const mapHtml = `
+      <div style="position:relative;width:100%;padding-bottom:75%;overflow:hidden;border-radius:${noBg ? "0" : "var(--ha-card-border-radius,12px)"};">
+        ${showMap ? `<canvas id="${mapContainerId}" style="position:absolute;top:0;left:0;width:100%;height:100%;"></canvas>` : ""}
+        <svg id="${mapContainerId}-svg"
+          viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"
+          style="position:absolute;top:0;left:0;width:100%;height:100%;overflow:visible;">
+          ${svgRoute}
+        </svg>
+      </div>`;
+      this.innerHTML = `
+      <ha-card${headerAttr} style="${cardStyle}">
+        ${textBlock}
+        ${mapHtml}
+      </ha-card>
+    `;
+      if (showMap && coords.length >= 2) {
+        this._scheduleMapDraw(coords, mapContainerId);
+      }
+    }
+    // ─── SVG route overlay ────────────────────────────────────────────────────
+    _buildRouteSvg(coords, color) {
+      if (coords.length < 2) {
+        return `<text x="500" y="375" text-anchor="middle" dominant-baseline="middle"
+        font-size="24" fill="${color}" opacity="0.5">No route data</text>`;
+      }
+      const lats = coords.map((c) => c[0]);
+      const lngs = coords.map((c) => c[1]);
+      const minLat = Math.min(...lats);
+      const maxLat = Math.max(...lats);
+      const minLng = Math.min(...lngs);
+      const maxLng = Math.max(...lngs);
+      const W = 1e3;
+      const H = 750;
+      const pad = 40;
+      const project = (lat, lng) => {
+        const latRad = lat * Math.PI / 180;
+        const mx = lng;
+        const my = Math.log(Math.tan(Math.PI / 4 + latRad / 2)) * 180 / Math.PI;
+        return { mx, my };
+      };
+      const projected = coords.map(([lat, lng]) => project(lat, lng));
+      const mxVals = projected.map((p) => p.mx);
+      const myVals = projected.map((p) => p.my);
+      const minMx = Math.min(...mxVals);
+      const maxMx = Math.max(...mxVals);
+      const minMy = Math.min(...myVals);
+      const maxMy = Math.max(...myVals);
+      const rangeX = maxMx - minMx || 1;
+      const rangeY = maxMy - minMy || 1;
+      const drawW = W - pad * 2;
+      const drawH = H - pad * 2;
+      const scaleX = drawW / rangeX;
+      const scaleY = drawH / rangeY;
+      const scale = Math.min(scaleX, scaleY);
+      const offsetX = pad + (drawW - rangeX * scale) / 2;
+      const offsetY = pad + (drawH - rangeY * scale) / 2;
+      const svgPoints = projected.map((p) => {
+        const x = offsetX + (p.mx - minMx) * scale;
+        const y = offsetY + (maxMy - p.my) * scale;
+        return `${x.toFixed(2)},${y.toFixed(2)}`;
+      });
+      const strokeWidth = Math.max(2, this._config.route_width || 3) * 2;
+      const pointsStr = svgPoints.join(" ");
+      const shadowWidth = strokeWidth + 4;
+      return `
+      <filter id="rh-map-shadow" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="${color}" flood-opacity="0.35"/>
+      </filter>
+      <polyline points="${pointsStr}"
+        fill="none" stroke="${color}" stroke-opacity="0.25"
+        stroke-width="${shadowWidth}" stroke-linecap="round" stroke-linejoin="round"/>
+      <polyline points="${pointsStr}"
+        fill="none" stroke="${color}"
+        stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round"
+        filter="url(#rh-map-shadow)"/>
+      <circle cx="${svgPoints[0].split(",")[0]}" cy="${svgPoints[0].split(",")[1]}" r="${strokeWidth * 1.4}"
+        fill="${color}" opacity="0.9"/>
+      <circle cx="${svgPoints[svgPoints.length - 1].split(",")[0]}" cy="${svgPoints[svgPoints.length - 1].split(",")[1]}" r="${strokeWidth * 1.4}"
+        fill="${color}"/>
+    `;
+    }
+    // ─── tile map drawing ─────────────────────────────────────────────────────
+    _scheduleMapDraw(coords, containerId) {
+      if (this._rafPending) return;
+      this._rafPending = true;
+      requestAnimationFrame(() => {
+        this._rafPending = false;
+        this._drawMap(coords, containerId);
+      });
+    }
+    _drawMap(coords, containerId) {
+      const canvas = this.querySelector(`#${CSS.escape(containerId)}`);
+      if (!canvas) return;
+      const lats = coords.map((c) => c[0]);
+      const lngs = coords.map((c) => c[1]);
+      const minLat = Math.min(...lats);
+      const maxLat = Math.max(...lats);
+      const minLng = Math.min(...lngs);
+      const maxLng = Math.max(...lngs);
+      const zoom = this._config.zoom;
+      const topLeft = this._latLngToTile(maxLat, minLng, zoom);
+      const bottomRight = this._latLngToTile(minLat, maxLng, zoom);
+      const tileX0 = Math.floor(topLeft.x);
+      const tileY0 = Math.floor(topLeft.y);
+      const tileX1 = Math.floor(bottomRight.x);
+      const tileY1 = Math.floor(bottomRight.y);
+      const TILE_SIZE = 256;
+      const tilesX = tileX1 - tileX0 + 1;
+      const tilesY = tileY1 - tileY0 + 1;
+      const mapW = tilesX * TILE_SIZE;
+      const mapH = tilesY * TILE_SIZE;
+      const pad = 0.1;
+      const routeTileX0 = topLeft.x - tileX0;
+      const routeTileY0 = topLeft.y - tileY0;
+      const routeTileX1 = bottomRight.x - tileX0;
+      const routeTileY1 = bottomRight.y - tileY0;
+      const routeW = (routeTileX1 - routeTileX0) * TILE_SIZE;
+      const routeH = (routeTileY1 - routeTileY0) * TILE_SIZE;
+      const routeLeft = routeTileX0 * TILE_SIZE;
+      const routeTop = routeTileY0 * TILE_SIZE;
+      const dispW = canvas.clientWidth || 300;
+      const dispH = canvas.clientHeight || 225;
+      const scaleX = dispW / (routeW * (1 + 2 * pad) || 1);
+      const scaleY = dispH / (routeH * (1 + 2 * pad) || 1);
+      const scale = Math.min(scaleX, scaleY);
+      canvas.width = dispW;
+      canvas.height = dispH;
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, dispW, dispH);
+      const originX = dispW / 2 - (routeLeft + routeW / 2) * scale;
+      const originY = dispH / 2 - (routeTop + routeH / 2) * scale;
+      const tileUrl = this._config.map_tile_url;
+      for (let tx = tileX0; tx <= tileX1; tx++) {
+        for (let ty = tileY0; ty <= tileY1; ty++) {
+          const url = tileUrl.replace("{z}", zoom).replace("{x}", tx).replace("{y}", ty);
+          const cx = originX + (tx - tileX0) * TILE_SIZE * scale;
+          const cy = originY + (ty - tileY0) * TILE_SIZE * scale;
+          const cw = TILE_SIZE * scale;
+          this._getTileImage(url, (img) => {
+            if (!img) return;
+            try {
+              ctx.drawImage(img, cx, cy, cw, cw);
+            } catch (_) {
+            }
+          });
+        }
+      }
+    }
+    _getTileImage(url, callback) {
+      const cached = this._tileCache.get(url);
+      if (cached) {
+        callback(cached === "error" ? null : cached);
+        return;
+      }
+      if (this._pendingTiles.has(url)) return;
+      this._pendingTiles.add(url);
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        this._tileCache.set(url, img);
+        this._pendingTiles.delete(url);
+        callback(img);
+      };
+      img.onerror = () => {
+        this._tileCache.set(url, "error");
+        this._pendingTiles.delete(url);
+        callback(null);
+      };
+      img.src = url;
+    }
+  };
+  customElements.define("rh-map-card", RHMapCard);
+  window.customCards = window.customCards || [];
+  window.customCards.push({
+    type: "rh-map-card",
+    name: "RH Map",
+    description: "Displays a GPS route from an encoded polyline entity.",
+    preview: false
+  });
 })();
