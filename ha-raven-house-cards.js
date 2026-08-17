@@ -2166,15 +2166,30 @@
     }
     set hass(hass) {
       this._hass = hass;
-      const key = this._buildRenderKey();
-      if (key === this._lastRenderKey) return;
-      this._lastRenderKey = key;
-      this._render();
+      this._scheduleRender();
     }
     connectedCallback() {
-      if (this._lastRenderKey && this._hass) {
-        this._render();
+      if (this._hass) {
+        this._scheduleRender();
       }
+    }
+    // ─── async render scheduling ─────────────────────────────────────────────
+    _scheduleRender() {
+      const token = Symbol();
+      this._renderToken = token;
+      const run = async () => {
+        const [primary, secondary, icon] = await Promise.all([
+          this._evalTemplateAsync(this._config?.primary),
+          this._evalTemplateAsync(this._config?.secondary),
+          this._evalTemplateAsync(this._config?.icon)
+        ]);
+        if (this._renderToken !== token) return;
+        const key = this._buildRenderKey(primary, secondary, icon);
+        if (key === this._lastRenderKey) return;
+        this._lastRenderKey = key;
+        this._render(primary, secondary, icon);
+      };
+      run();
     }
     // ─── config helpers ───────────────────────────────────────────────────────
     _fgColor() {
@@ -2207,6 +2222,18 @@
         }
         return `{{ ${expr} }}`;
       });
+    }
+    async _evalTemplateAsync(tmpl) {
+      if (typeof tmpl !== "string" || !tmpl.trim()) return "";
+      const simple = this._evalTemplate(tmpl);
+      if (!simple.includes("{{") && !simple.includes("{%")) return simple;
+      if (!this._hass?.callApi) return simple;
+      try {
+        const result = await this._hass.callApi("POST", "template", { template: tmpl });
+        return typeof result === "string" ? result.trim() : String(result ?? "").trim();
+      } catch (_) {
+        return simple;
+      }
     }
     // ─── polyline decoding (Google Encoded Polyline Algorithm) ────────────────
     _decodePolyline(encoded) {
@@ -2255,15 +2282,15 @@
       return { lat, lng };
     }
     // ─── render key ───────────────────────────────────────────────────────────
-    _buildRenderKey() {
+    _buildRenderKey(primary, secondary, icon) {
       const state = this._entityState();
       const attrs = state?.attributes || {};
       return [
         this._config?.entity,
         this._config?.polyline_attribute ? attrs[this._config.polyline_attribute] : state?.state,
-        this._evalTemplate(this._config?.primary),
-        this._evalTemplate(this._config?.secondary),
-        this._config?.icon,
+        primary,
+        secondary,
+        icon,
         this._config?.show_map,
         this._fgColor(),
         this._config?.bg_color,
@@ -2271,20 +2298,18 @@
       ].join("~");
     }
     // ─── main render ──────────────────────────────────────────────────────────
-    _render() {
+    _render(primary, secondary, icon) {
       const color = this._fgColor();
       const polylineStr = this._polylineString();
       const coords = this._decodePolyline(polylineStr);
       const showMap = this._config.show_map !== false;
-      const icon = typeof this._config.icon === "string" ? this._config.icon.trim() : "";
-      const primary = this._evalTemplate(this._config.primary);
-      const secondary = this._evalTemplate(this._config.secondary);
+      const iconStr = typeof icon === "string" ? icon.trim() : "";
       const title = this._config.title;
       const headerAttr = title !== void 0 && title !== "" ? ` header="${title}"` : "";
       const noBg = !showMap && !this._config.bg_color;
       const cardStyle = noBg ? "background:transparent;box-shadow:none;border:none;" : this._config.bg_color ? `background:${this._config.bg_color};` : "";
-      const iconHtml = icon ? `<div style="display:flex;justify-content:center;align-items:center;margin-bottom:8px;">
-           <ha-icon icon="${icon}" style="--mdi-icon-size:32px;color:${color};"></ha-icon>
+      const iconHtml = iconStr ? `<div style="display:flex;justify-content:center;align-items:center;margin-bottom:8px;">
+           <ha-icon icon="${iconStr}" style="--mdi-icon-size:32px;color:${color};"></ha-icon>
          </div>` : "";
       const primaryHtml = primary ? `<div style="font-size:22px;font-weight:800;color:${color};text-align:center;line-height:1.2;margin-bottom:2px;">${primary}</div>` : "";
       const secondaryHtml = secondary ? `<div style="font-size:14px;font-weight:600;color:${color};text-align:center;opacity:0.75;line-height:1.2;">${secondary}</div>` : "";

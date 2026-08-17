@@ -27,9 +27,12 @@
  * primary           – template string for primary text  (optional)
  * secondary         – template string for secondary text  (optional)
  *
- * Templates in `primary` and `secondary` support a simple
- *   {{ states('sensor.foo') }}   and   {{ state_attr('sensor.foo','bar') }}
- * replacement so that they work without the HA template engine.
+ * Templates in `primary`, `secondary`, and `icon` are evaluated using the HA
+ * template engine when available so that any valid Jinja2 expression works,
+ * including conditionals ({% if %}/{% else %}/{% endif %}), filters, and all
+ * standard HA template functions.  A lightweight client-side fallback handles
+ * the common {{ states('sensor.foo') }} / {{ state_attr('sensor.foo','bar') }}
+ * patterns when the API is unreachable.
  */
 class RHMapCard extends HTMLElement {
   constructor() {
@@ -65,16 +68,33 @@ class RHMapCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    const key = this._buildRenderKey();
-    if (key === this._lastRenderKey) return;
-    this._lastRenderKey = key;
-    this._render();
+    this._scheduleRender();
   }
 
   connectedCallback() {
-    if (this._lastRenderKey && this._hass) {
-      this._render();
+    if (this._hass) {
+      this._scheduleRender();
     }
+  }
+
+  // ─── async render scheduling ─────────────────────────────────────────────
+
+  _scheduleRender() {
+    const token = Symbol();
+    this._renderToken = token;
+    const run = async () => {
+      const [primary, secondary, icon] = await Promise.all([
+        this._evalTemplateAsync(this._config?.primary),
+        this._evalTemplateAsync(this._config?.secondary),
+        this._evalTemplateAsync(this._config?.icon),
+      ]);
+      if (this._renderToken !== token) return;
+      const key = this._buildRenderKey(primary, secondary, icon);
+      if (key === this._lastRenderKey) return;
+      this._lastRenderKey = key;
+      this._render(primary, secondary, icon);
+    };
+    run();
   }
 
   // ─── config helpers ───────────────────────────────────────────────────────
@@ -117,6 +137,19 @@ class RHMapCard extends HTMLElement {
       }
       return `{{ ${expr} }}`;
     });
+  }
+
+  async _evalTemplateAsync(tmpl) {
+    if (typeof tmpl !== "string" || !tmpl.trim()) return "";
+    const simple = this._evalTemplate(tmpl);
+    if (!simple.includes("{{") && !simple.includes("{%")) return simple;
+    if (!this._hass?.callApi) return simple;
+    try {
+      const result = await this._hass.callApi("POST", "template", { template: tmpl });
+      return typeof result === "string" ? result.trim() : String(result ?? "").trim();
+    } catch (_) {
+      return simple;
+    }
   }
 
   // ─── polyline decoding (Google Encoded Polyline Algorithm) ────────────────
@@ -174,7 +207,7 @@ class RHMapCard extends HTMLElement {
 
   // ─── render key ───────────────────────────────────────────────────────────
 
-  _buildRenderKey() {
+  _buildRenderKey(primary, secondary, icon) {
     const state = this._entityState();
     const attrs = state?.attributes || {};
     return [
@@ -182,9 +215,9 @@ class RHMapCard extends HTMLElement {
       this._config?.polyline_attribute
         ? attrs[this._config.polyline_attribute]
         : state?.state,
-      this._evalTemplate(this._config?.primary),
-      this._evalTemplate(this._config?.secondary),
-      this._config?.icon,
+      primary,
+      secondary,
+      icon,
       this._config?.show_map,
       this._fgColor(),
       this._config?.bg_color,
@@ -194,14 +227,12 @@ class RHMapCard extends HTMLElement {
 
   // ─── main render ──────────────────────────────────────────────────────────
 
-  _render() {
+  _render(primary, secondary, icon) {
     const color = this._fgColor();
     const polylineStr = this._polylineString();
     const coords = this._decodePolyline(polylineStr);
     const showMap = this._config.show_map !== false;
-    const icon = typeof this._config.icon === "string" ? this._config.icon.trim() : "";
-    const primary = this._evalTemplate(this._config.primary);
-    const secondary = this._evalTemplate(this._config.secondary);
+    const iconStr = typeof icon === "string" ? icon.trim() : "";
     const title = this._config.title;
     const headerAttr = (title !== undefined && title !== "") ? ` header="${title}"` : "";
 
@@ -214,9 +245,9 @@ class RHMapCard extends HTMLElement {
         : "";
 
     // Icon markup
-    const iconHtml = icon
+    const iconHtml = iconStr
       ? `<div style="display:flex;justify-content:center;align-items:center;margin-bottom:8px;">
-           <ha-icon icon="${icon}" style="--mdi-icon-size:32px;color:${color};"></ha-icon>
+           <ha-icon icon="${iconStr}" style="--mdi-icon-size:32px;color:${color};"></ha-icon>
          </div>`
       : "";
 
