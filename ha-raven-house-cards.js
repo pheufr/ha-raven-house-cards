@@ -2198,7 +2198,72 @@
     _entityState() {
       return this._hass?.states?.[this._config.entity] || null;
     }
+    /**
+     * Returns the parsed activity array when the entity holds an array of
+     * activities (either as the entity state or via a nominated attribute),
+     * otherwise returns null.
+     */
+    _activityArray() {
+      const state = this._entityState();
+      if (!state) return null;
+      let raw;
+      if (this._config.array_attribute) {
+        raw = state.attributes?.[this._config.array_attribute];
+      } else {
+        const stateStr = state.state;
+        if (typeof stateStr === "string" && stateStr.trimStart().startsWith("[")) {
+          try {
+            raw = JSON.parse(stateStr);
+          } catch (_) {
+          }
+        }
+        if (!Array.isArray(raw)) {
+          for (const val of Object.values(state.attributes || {})) {
+            if (Array.isArray(val) && val.length > 0 && typeof val[0] === "object") {
+              raw = val;
+              break;
+            }
+          }
+        }
+      }
+      return Array.isArray(raw) ? raw : null;
+    }
+    /**
+     * Picks the most recent activity with hasPolyline=true from an array, or
+     * returns null if no suitable entry exists.
+     */
+    _chosenActivity() {
+      const arr = this._activityArray();
+      if (!arr) return null;
+      const withPolyline = arr.filter((a) => a && a.hasPolyline === true);
+      if (!withPolyline.length) return null;
+      const dated = withPolyline.filter((a) => a.startTimeLocal || a.startTime);
+      if (dated.length) {
+        dated.sort((a, b) => {
+          const ta = new Date(a.startTimeLocal || a.startTime).getTime();
+          const tb = new Date(b.startTimeLocal || b.startTime).getTime();
+          return tb - ta;
+        });
+        return dated[0];
+      }
+      return withPolyline[0];
+    }
+    /**
+     * Returns the attributes object to use for template resolution.
+     * For array entities this is the chosen activity member; otherwise it is
+     * the HA entity's attributes.
+     */
+    _resolvedAttributes() {
+      const activity = this._chosenActivity();
+      if (activity) return activity;
+      return this._entityState()?.attributes || {};
+    }
     _polylineString() {
+      const activity = this._chosenActivity();
+      if (activity) {
+        const attr = this._config.polyline_attribute || "polyline";
+        return String(activity[attr] || "");
+      }
       const state = this._entityState();
       if (!state) return "";
       if (this._config.polyline_attribute) {
@@ -2207,18 +2272,46 @@
       return String(state.state || "");
     }
     // ─── template evaluation ──────────────────────────────────────────────────
+    /**
+     * Lightweight client-side template fallback.
+     *
+     * Supported patterns:
+     *   {{ states('sensor.foo') }}
+     *   {{ state_attr('sensor.foo', 'bar') }}
+     *   {{ entity }}                          → the configured entity id
+     *   {{ states(entity) }}                  → state of the configured entity
+     *   {{ state_attr(entity, 'bar') }}       → attribute 'bar'; when in array
+     *                                           mode this reads from the chosen
+     *                                           activity member, not HA attributes
+     *   {{ attribute_name }}                  → resolved attribute from the chosen
+     *                                           member / entity attributes
+     */
     _evalTemplate(tmpl) {
       if (typeof tmpl !== "string" || !tmpl.trim()) return "";
+      const entityId = this._config.entity;
+      const resolvedAttrs = this._resolvedAttributes();
+      const isArrayMode = this._chosenActivity() !== null;
       return tmpl.replace(/\{\{\s*([\s\S]+?)\s*\}\}/g, (_, expr) => {
-        const statesMatch = expr.match(/^states\(\s*['"]([^'"]+)['"]\s*\)$/);
+        if (expr.trim() === "entity") return entityId;
+        const statesMatch = expr.match(/^states\(\s*(['"]?)([^'")\s]+)\1\s*\)$/);
         if (statesMatch) {
-          return this._hass?.states?.[statesMatch[1]]?.state ?? "";
+          const id = statesMatch[1] ? statesMatch[2] : entityId;
+          return this._hass?.states?.[id]?.state ?? "";
         }
         const attrMatch = expr.match(
-          /^state_attr\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)$/
+          /^state_attr\(\s*(['"]?)([^'")\s,]+)\1\s*,\s*['"]([^'"]+)['"]\s*\)$/
         );
         if (attrMatch) {
-          return this._hass?.states?.[attrMatch[1]]?.attributes?.[attrMatch[2]] ?? "";
+          const id = attrMatch[1] ? attrMatch[2] : entityId;
+          const attrName = attrMatch[3];
+          if (id === entityId && isArrayMode) {
+            return resolvedAttrs[attrName] ?? "";
+          }
+          return this._hass?.states?.[id]?.attributes?.[attrName] ?? "";
+        }
+        if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(expr.trim())) {
+          const val = resolvedAttrs[expr.trim()];
+          if (val !== void 0) return val;
         }
         return `{{ ${expr} }}`;
       });
@@ -2229,7 +2322,7 @@
       if (!simple.includes("{{") && !simple.includes("{%")) return simple;
       if (!this._hass?.callApi) return simple;
       try {
-        const result = await this._hass.callApi("POST", "template", { template: tmpl });
+        const result = await this._hass.callApi("POST", "template", { template: simple });
         return typeof result === "string" ? result.trim() : String(result ?? "").trim();
       } catch (_) {
         return simple;
@@ -2283,11 +2376,13 @@
     }
     // ─── render key ───────────────────────────────────────────────────────────
     _buildRenderKey(primary, secondary, icon) {
+      const activity = this._chosenActivity();
       const state = this._entityState();
       const attrs = state?.attributes || {};
+      const polylineKey = activity ? activity[this._config.polyline_attribute || "polyline"] || "" : this._config.polyline_attribute ? attrs[this._config.polyline_attribute] : state?.state;
       return [
         this._config?.entity,
-        this._config?.polyline_attribute ? attrs[this._config.polyline_attribute] : state?.state,
+        polylineKey,
         primary,
         secondary,
         icon,
