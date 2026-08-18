@@ -284,9 +284,12 @@ class RHMapCard extends HTMLElement {
         if (val !== undefined) return val;
       }
 
-      // General expression: evaluate with attribute values as local variables
+      // General expression: evaluate with attribute values as local variables.
+      // Only pass keys that are valid JS identifiers to avoid SyntaxError in
+      // new Function when the attrs object contains hyphenated or numeric keys.
       try {
-        const keys = Object.keys(attrs);
+        const validIdRe = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+        const keys = Object.keys(attrs).filter((k) => validIdRe.test(k));
         const values = keys.map((k) => attrs[k]);
         // eslint-disable-next-line no-new-func
         const fn = new Function(...keys, `return (${expr.trim()});`);
@@ -300,13 +303,37 @@ class RHMapCard extends HTMLElement {
     });
   }
 
+  /**
+   * Substitutes known attr values into remaining {{ }} and {% %} blocks before
+   * sending the template to HA's Jinja2 engine.  This lets pipes (| int) and
+   * conditionals ({% if var == 'x' %}) work correctly with computed fields that
+   * only exist locally (e.g. history item attributes, pace, duration_fmt).
+   */
+  _substituteAttrsForHass(tmpl, attrs) {
+    if (!attrs || Object.keys(attrs).length === 0) return tmpl;
+    const validIdRe = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+    return tmpl.replace(/(\{\{[\s\S]*?\}\}|\{%[\s\S]*?%\})/g, (block) => {
+      let result = block;
+      for (const [key, val] of Object.entries(attrs)) {
+        if (!validIdRe.test(key)) continue;
+        const literal =
+          typeof val === "string" ? JSON.stringify(val)
+          : val === null || val === undefined ? "none"
+          : String(val);
+        result = result.replace(new RegExp(`\\b${key}\\b`, "g"), literal);
+      }
+      return result;
+    });
+  }
+
   async _evalTemplateAsyncWith(tmpl, entityId, resolvedAttrs) {
     if (typeof tmpl !== "string" || !tmpl.trim()) return "";
     const simple = this._evalTemplateWith(tmpl, entityId, resolvedAttrs);
     if (!simple.includes("{{") && !simple.includes("{%")) return simple;
     if (!this._hass?.callApi) return simple;
     try {
-      const result = await this._hass.callApi("POST", "template", { template: simple });
+      const substituted = this._substituteAttrsForHass(simple, resolvedAttrs || {});
+      const result = await this._hass.callApi("POST", "template", { template: substituted });
       return typeof result === "string" ? result.trim() : String(result ?? "").trim();
     } catch (_) {
       return simple;
