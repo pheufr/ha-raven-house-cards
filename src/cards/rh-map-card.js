@@ -3,41 +3,47 @@
  *
  * Renders a GPS route from a polyline-encoded entity (Google Encoded Polyline
  * Algorithm Format) as an SVG path.  Optionally overlays a tile-map background.
- * Supports primary / secondary text templates and an optional MDI icon above
- * the map, styled to match the rest of the RH card series.
+ * Supports primary / secondary text templates and an optional MDI icon, styled
+ * to match the rest of the RH card series.
  *
  * Configuration
  * ─────────────────────────────────────────────────────────────
- * entity            – required entity whose state (or attribute) holds the
- *                     encoded polyline string.  When the entity's state (or a
- *                     nominated attribute) is a JSON array of activity objects,
- *                     the card automatically selects the most recent entry that
- *                     has hasPolyline=true.
- * polyline_attribute – attribute name to read from (default: uses entity state)
- *                     For array entities this is the attribute on each array
- *                     *member* (default: "polyline").
+ * primary_entity    – entity for the top "primary" info block.  Templates in
+ *                     icon / primary / secondary may use {{ entity }} to
+ *                     reference it and {{ attr_name }} for its attributes.
+ * history_entity    – entity whose state (or attribute) holds a JSON array of
+ *                     activity objects.  Each item is rendered in the history
+ *                     list below the map.  Templates may use {{ entity }} to
+ *                     reference the array item being rendered.
+ * map_entity        – entity whose state (or `polyline` attribute) holds the
+ *                     encoded polyline.  The card also checks `has_polyline`
+ *                     and `polyline` attributes automatically.
+ * polyline_attribute – override the attribute name read from map_entity
+ *                     (default: auto-detect from state → "polyline" attribute)
  * title             – card header text (omit or "" to suppress)
- * color / fg_color  – foreground / route colour
- *                     (default: var(--primary-color))
+ * color / fg_color  – foreground / route colour  (default: var(--primary-color))
  * route_width       – stroke width of the route line  (default: 3)
  * show_map          – true/false – whether to render the tile map background
  *                     (default: true)
  * map_tile_url      – tile server URL template using {z}/{x}/{y}
  *                     (default: OpenStreetMap)
  * zoom              – tile zoom level used for the background map  (default: 13)
- * bg_color          – explicit card background colour (only relevant when
- *                     show_map is false; if omitted with show_map:false the
- *                     card is completely transparent)
- * icon              – MDI icon name, e.g. "mdi:run"  (optional)
- * primary           – template string for primary text  (optional)
- * secondary         – template string for secondary text  (optional)
+ * bg_color          – explicit card background colour
+ * icon              – MDI icon template for the primary section  (optional)
+ * primary           – template string for primary section primary text
+ * secondary         – template string for primary section secondary text
+ * history_icon      – MDI icon template for each history row  (optional)
+ * history_primary   – template for each history row primary text  (optional)
+ * history_secondary – template for each history row secondary text  (optional)
+ * history_limit     – max number of history items to show  (default: 5)
  *
- * Templates in `primary`, `secondary`, and `icon` are evaluated using the HA
- * template engine when available so that any valid Jinja2 expression works,
- * including conditionals ({% if %}/{% else %}/{% endif %}), filters, and all
- * standard HA template functions.  A lightweight client-side fallback handles
- * the common {{ states('sensor.foo') }} / {{ state_attr('sensor.foo','bar') }}
- * patterns when the API is unreachable.
+ * In all templates {{ entity }} resolves to the relevant entity id (primary or
+ * history item), {{ states(entity) }} to its state, {{ state_attr(entity,'x') }}
+ * to an attribute, and {{ bare_name }} to an attribute value directly.
+ *
+ * Special computed values available inside history templates:
+ *   {{ pace }}   – distance/duration as MM:SS per km  (duration in seconds, distance in km)
+ *   {{ duration_fmt }} – duration formatted as HH:MM:SS
  */
 class RHMapCard extends HTMLElement {
   constructor() {
@@ -45,11 +51,6 @@ class RHMapCard extends HTMLElement {
     this._lastRenderKey = "";
     this._tileCache = new Map();
     this._pendingTiles = new Set();
-    this._mapCanvas = null;
-    this._mapCtx = null;
-    this._currentPolyline = "";
-    this._currentZoom = 13;
-    this._currentBounds = null;
     this._rafPending = false;
   }
 
@@ -57,8 +58,8 @@ class RHMapCard extends HTMLElement {
 
   setConfig(config) {
     const safe = config && typeof config === "object" ? config : {};
-    if (!safe.entity) {
-      throw new Error("rh-map-card: 'entity' is required");
+    if (!safe.primary_entity && !safe.history_entity && !safe.map_entity) {
+      throw new Error("rh-map-card: at least one of 'primary_entity', 'history_entity', or 'map_entity' is required");
     }
     this._config = {
       show_map: safe.show_map !== false,
@@ -67,6 +68,7 @@ class RHMapCard extends HTMLElement {
       map_tile_url: typeof safe.map_tile_url === "string"
         ? safe.map_tile_url
         : "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+      history_limit: Number(safe.history_limit) > 0 ? Number(safe.history_limit) : 5,
       ...safe,
     };
   }
@@ -88,16 +90,34 @@ class RHMapCard extends HTMLElement {
     const token = Symbol();
     this._renderToken = token;
     const run = async () => {
+      // Evaluate primary section templates
+      const primaryAttrs = this._primaryAttributes();
       const [primary, secondary, icon] = await Promise.all([
-        this._evalTemplateAsync(this._config?.primary),
-        this._evalTemplateAsync(this._config?.secondary),
-        this._evalTemplateAsync(this._config?.icon),
+        this._evalTemplateAsyncWith(this._config?.primary, this._config?.primary_entity, primaryAttrs),
+        this._evalTemplateAsyncWith(this._config?.secondary, this._config?.primary_entity, primaryAttrs),
+        this._evalTemplateAsyncWith(this._config?.icon, this._config?.primary_entity, primaryAttrs),
       ]);
+
+      // Evaluate history section templates for each item
+      const historyItems = this._historyArray();
+      const historyRows = await Promise.all(
+        historyItems.map(async (item) => {
+          const computed = this._computedFields(item);
+          const merged = { ...item, ...computed };
+          const [hIcon, hPrimary, hSecondary] = await Promise.all([
+            this._evalTemplateAsyncWith(this._config?.history_icon, this._config?.history_entity, merged),
+            this._evalTemplateAsyncWith(this._config?.history_primary, this._config?.history_entity, merged),
+            this._evalTemplateAsyncWith(this._config?.history_secondary, this._config?.history_entity, merged),
+          ]);
+          return { icon: hIcon, primary: hPrimary, secondary: hSecondary };
+        })
+      );
+
       if (this._renderToken !== token) return;
-      const key = this._buildRenderKey(primary, secondary, icon);
+      const key = this._buildRenderKey(primary, secondary, icon, historyRows);
       if (key === this._lastRenderKey) return;
       this._lastRenderKey = key;
-      this._render(primary, secondary, icon);
+      this._render(primary, secondary, icon, historyRows);
     };
     run();
   }
@@ -112,88 +132,108 @@ class RHMapCard extends HTMLElement {
     );
   }
 
-  _entityState() {
-    return this._hass?.states?.[this._config.entity] || null;
+  /** Attributes for the primary entity section. */
+  _primaryAttributes() {
+    const entityId = this._config?.primary_entity;
+    if (!entityId) return {};
+    return this._hass?.states?.[entityId]?.attributes || {};
   }
 
   /**
-   * Returns the parsed activity array when the entity holds an array of
-   * activities (either as the entity state or via a nominated attribute),
-   * otherwise returns null.
+   * Returns the history array from history_entity.  Tries entity state (JSON),
+   * then searches attributes for an array value.
    */
-  _activityArray() {
-    const state = this._entityState();
-    if (!state) return null;
+  _historyArray() {
+    const entityId = this._config?.history_entity;
+    if (!entityId) return [];
+    const state = this._hass?.states?.[entityId];
+    if (!state) return [];
 
     let raw;
-    if (this._config.array_attribute) {
-      raw = state.attributes?.[this._config.array_attribute];
-    } else {
-      // Try entity state first (some integrations store JSON in state)
-      const stateStr = state.state;
-      if (typeof stateStr === "string" && stateStr.trimStart().startsWith("[")) {
-        try { raw = JSON.parse(stateStr); } catch (_) { /* fall through */ }
-      }
-      // Fall back to checking all attributes for a top-level array
-      if (!Array.isArray(raw)) {
-        for (const val of Object.values(state.attributes || {})) {
-          if (Array.isArray(val) && val.length > 0 && typeof val[0] === "object") {
-            raw = val;
-            break;
-          }
+    // Try entity state as JSON array
+    const stateStr = state.state;
+    if (typeof stateStr === "string" && stateStr.trimStart().startsWith("[")) {
+      try { raw = JSON.parse(stateStr); } catch (_) { /* fall through */ }
+    }
+    // Try attributes for an array
+    if (!Array.isArray(raw)) {
+      for (const val of Object.values(state.attributes || {})) {
+        if (Array.isArray(val) && val.length > 0 && typeof val[0] === "object") {
+          raw = val;
+          break;
         }
       }
     }
-
-    return Array.isArray(raw) ? raw : null;
+    if (!Array.isArray(raw)) return [];
+    const limit = this._config?.history_limit || 5;
+    return raw.slice(0, limit);
   }
 
   /**
-   * Picks the most recent activity with hasPolyline=true from an array, or
-   * returns null if no suitable entry exists.
+   * Extracts the polyline string from map_entity.
+   * Checks: state, `polyline` attribute, respects `has_polyline` flag.
    */
-  _chosenActivity() {
-    const arr = this._activityArray();
-    if (!arr) return null;
-    const withPolyline = arr.filter((a) => a && a.hasPolyline === true);
-    if (!withPolyline.length) return null;
-    // Assume the array is ordered most-recent-first (Garmin Connect ordering).
-    // If entries have a startTimeLocal/startTime field, sort descending.
-    const dated = withPolyline.filter((a) => a.startTimeLocal || a.startTime);
-    if (dated.length) {
-      dated.sort((a, b) => {
-        const ta = new Date(a.startTimeLocal || a.startTime).getTime();
-        const tb = new Date(b.startTimeLocal || b.startTime).getTime();
-        return tb - ta;
-      });
-      return dated[0];
-    }
-    return withPolyline[0];
-  }
-
-  /**
-   * Returns the attributes object to use for template resolution.
-   * For array entities this is the chosen activity member; otherwise it is
-   * the HA entity's attributes.
-   */
-  _resolvedAttributes() {
-    const activity = this._chosenActivity();
-    if (activity) return activity;
-    return this._entityState()?.attributes || {};
-  }
-
   _polylineString() {
-    const activity = this._chosenActivity();
-    if (activity) {
-      const attr = this._config.polyline_attribute || "polyline";
-      return String(activity[attr] || "");
-    }
-    const state = this._entityState();
+    const entityId = this._config?.map_entity;
+    if (!entityId) return "";
+    const state = this._hass?.states?.[entityId];
     if (!state) return "";
-    if (this._config.polyline_attribute) {
-      return String(state.attributes?.[this._config.polyline_attribute] || "");
+
+    const attrs = state.attributes || {};
+
+    // If a specific attribute is nominated use it
+    if (this._config?.polyline_attribute) {
+      return String(attrs[this._config.polyline_attribute] || "");
     }
-    return String(state.state || "");
+
+    // Prefer the 'polyline' attribute when has_polyline is truthy
+    if (attrs.polyline && (attrs.has_polyline === true || attrs.has_polyline === undefined)) {
+      return String(attrs.polyline);
+    }
+
+    // Fall back to entity state
+    const s = String(state.state || "");
+    // Avoid using unavailable/unknown as polyline
+    if (s && s !== "unavailable" && s !== "unknown") return s;
+    return "";
+  }
+
+  // ─── computed helpers ─────────────────────────────────────────────────────
+
+  /** Format seconds as HH:MM:SS */
+  _formatDuration(seconds) {
+    if (seconds == null || isNaN(Number(seconds))) return "";
+    const total = Math.round(Number(seconds));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+
+  /** Format pace in seconds/km as MM:SS */
+  _formatPace(secondsPerKm) {
+    if (secondsPerKm == null || isNaN(Number(secondsPerKm)) || Number(secondsPerKm) <= 0) return "";
+    const total = Math.round(Number(secondsPerKm));
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+
+  /**
+   * Computes derived fields for a history item:
+   *   duration_fmt – formatted duration (HH:MM:SS)
+   *   pace         – calculated pace as MM:SS/km
+   */
+  _computedFields(item) {
+    const out = {};
+    if (item?.duration != null) {
+      out.duration_fmt = this._formatDuration(item.duration);
+    }
+    if (item?.duration != null && item?.distance != null && Number(item.distance) > 0) {
+      const paceSecPerKm = Number(item.duration) / Number(item.distance);
+      out.pace = this._formatPace(paceSecPerKm);
+    }
+    return out;
   }
 
   // ─── template evaluation ──────────────────────────────────────────────────
@@ -204,23 +244,18 @@ class RHMapCard extends HTMLElement {
    * Supported patterns:
    *   {{ states('sensor.foo') }}
    *   {{ state_attr('sensor.foo', 'bar') }}
-   *   {{ entity }}                          → the configured entity id
-   *   {{ states(entity) }}                  → state of the configured entity
-   *   {{ state_attr(entity, 'bar') }}       → attribute 'bar'; when in array
-   *                                           mode this reads from the chosen
-   *                                           activity member, not HA attributes
-   *   {{ attribute_name }}                  → resolved attribute from the chosen
-   *                                           member / entity attributes
+   *   {{ entity }}                   → the relevant entity id
+   *   {{ states(entity) }}           → state of the relevant entity
+   *   {{ state_attr(entity, 'bar') }}→ attribute from the resolved attrs object
+   *   {{ attribute_name }}           → resolved attribute / computed field
    */
-  _evalTemplate(tmpl) {
+  _evalTemplateWith(tmpl, entityId, resolvedAttrs) {
     if (typeof tmpl !== "string" || !tmpl.trim()) return "";
-    const entityId = this._config.entity;
-    const resolvedAttrs = this._resolvedAttributes();
-    const isArrayMode = this._chosenActivity() !== null;
+    const attrs = resolvedAttrs || {};
 
     return tmpl.replace(/\{\{\s*([\s\S]+?)\s*\}\}/g, (_, expr) => {
       // {{ entity }} → entity id
-      if (expr.trim() === "entity") return entityId;
+      if (expr.trim() === "entity") return entityId || "";
 
       // {{ states('sensor.foo') }} or {{ states(entity) }}
       const statesMatch = expr.match(/^states\(\s*(['"]?)([^'")\s]+)\1\s*\)$/);
@@ -236,16 +271,15 @@ class RHMapCard extends HTMLElement {
       if (attrMatch) {
         const id = attrMatch[1] ? attrMatch[2] : entityId;
         const attrName = attrMatch[3];
-        if (id === entityId && isArrayMode) {
-          // Return from chosen activity member
-          return resolvedAttrs[attrName] ?? "";
+        if (!attrMatch[1] || id === entityId) {
+          return attrs[attrName] ?? "";
         }
         return this._hass?.states?.[id]?.attributes?.[attrName] ?? "";
       }
 
-      // {{ some_bare_name }} → look up in resolved attributes
+      // {{ some_bare_name }} → look up in resolved attributes / computed fields
       if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(expr.trim())) {
-        const val = resolvedAttrs[expr.trim()];
+        const val = attrs[expr.trim()];
         if (val !== undefined) return val;
       }
 
@@ -253,15 +287,11 @@ class RHMapCard extends HTMLElement {
     });
   }
 
-  async _evalTemplateAsync(tmpl) {
+  async _evalTemplateAsyncWith(tmpl, entityId, resolvedAttrs) {
     if (typeof tmpl !== "string" || !tmpl.trim()) return "";
-    const simple = this._evalTemplate(tmpl);
+    const simple = this._evalTemplateWith(tmpl, entityId, resolvedAttrs);
     if (!simple.includes("{{") && !simple.includes("{%")) return simple;
     if (!this._hass?.callApi) return simple;
-    // When in array mode the HA template engine won't know about the chosen
-    // activity member, so we substitute known {{ entity }} / {{ state_attr(entity, ...) }}
-    // patterns before sending to the API (the client-side pass already did this
-    // for fully resolvable expressions).
     try {
       const result = await this._hass.callApi("POST", "template", { template: simple });
       return typeof result === "string" ? result.trim() : String(result ?? "").trim();
@@ -325,21 +355,16 @@ class RHMapCard extends HTMLElement {
 
   // ─── render key ───────────────────────────────────────────────────────────
 
-  _buildRenderKey(primary, secondary, icon) {
-    const activity = this._chosenActivity();
-    const state = this._entityState();
-    const attrs = state?.attributes || {};
-    const polylineKey = activity
-      ? activity[this._config.polyline_attribute || "polyline"] || ""
-      : this._config.polyline_attribute
-        ? attrs[this._config.polyline_attribute]
-        : state?.state;
+  _buildRenderKey(primary, secondary, icon, historyRows) {
     return [
-      this._config?.entity,
-      polylineKey,
+      this._config?.primary_entity,
+      this._config?.history_entity,
+      this._config?.map_entity,
+      this._polylineString(),
       primary,
       secondary,
       icon,
+      JSON.stringify(historyRows),
       this._config?.show_map,
       this._fgColor(),
       this._config?.bg_color,
@@ -349,11 +374,11 @@ class RHMapCard extends HTMLElement {
 
   // ─── main render ──────────────────────────────────────────────────────────
 
-  _render(primary, secondary, icon) {
+  _render(primary, secondary, icon, historyRows) {
     const color = this._fgColor();
     const polylineStr = this._polylineString();
     const coords = this._decodePolyline(polylineStr);
-    const showMap = this._config.show_map !== false;
+    const showMap = this._config.show_map !== false && this._config.map_entity;
     const iconStr = typeof icon === "string" ? icon.trim() : "";
     const title = this._config.title;
     const headerAttr = (title !== undefined && title !== "") ? ` header="${title}"` : "";
@@ -361,60 +386,81 @@ class RHMapCard extends HTMLElement {
     // Card background
     const noBg = !showMap && !this._config.bg_color;
     const cardStyle = noBg
-      ? "background:transparent;box-shadow:none;border:none;"
+      ? ""
       : this._config.bg_color
         ? `background:${this._config.bg_color};`
         : "";
 
-    // Icon markup
-    const iconHtml = iconStr
-      ? `<div style="display:flex;justify-content:center;align-items:center;margin-bottom:8px;">
-           <ha-icon icon="${iconStr}" style="--mdi-icon-size:32px;color:${color};"></ha-icon>
-         </div>`
+    // ── Primary section ────────────────────────────────────────────────────
+    const primaryIconHtml = iconStr
+      ? `<ha-icon icon="${iconStr}" style="--mdi-icon-size:40px;color:${color};margin-bottom:4px;"></ha-icon>`
       : "";
-
-    // Primary / secondary text
-    const primaryHtml = primary
+    const primaryTextHtml = primary
       ? `<div style="font-size:22px;font-weight:800;color:${color};text-align:center;line-height:1.2;margin-bottom:2px;">${primary}</div>`
       : "";
-    const secondaryHtml = secondary
+    const primarySecondaryHtml = secondary
       ? `<div style="font-size:14px;font-weight:600;color:${color};text-align:center;opacity:0.75;line-height:1.2;">${secondary}</div>`
       : "";
 
-    const textBlock = (primaryHtml || secondaryHtml)
-      ? `<div style="padding:10px 12px 0;display:flex;flex-direction:column;align-items:center;gap:2px;">
-           ${iconHtml}${primaryHtml}${secondaryHtml}
+    const primaryBlock = (primaryIconHtml || primaryTextHtml || primarySecondaryHtml)
+      ? `<div style="padding:12px 14px 8px;display:flex;flex-direction:column;align-items:center;gap:2px;">
+           ${primaryIconHtml}${primaryTextHtml}${primarySecondaryHtml}
          </div>`
-      : iconHtml
-        ? `<div style="padding:10px 12px 0;">${iconHtml}</div>`
-        : "";
+      : "";
 
-    // Build SVG route overlay
-    const svgRoute = this._buildRouteSvg(coords, color);
+    // ── Map section ────────────────────────────────────────────────────────
+    let mapHtml = "";
+    if (this._config.map_entity) {
+      const svgRoute = this._buildRouteSvg(coords, color);
+      const mapContainerId = `rh-map-${(this._config.map_entity || "").replace(/[^a-z0-9]/gi, "_")}`;
+      mapHtml = `
+        <div style="position:relative;width:100%;padding-bottom:75%;overflow:hidden;border-radius:var(--ha-card-border-radius,12px);">
+          ${showMap ? `<canvas id="${mapContainerId}" style="position:absolute;top:0;left:0;width:100%;height:100%;"></canvas>` : ""}
+          <svg id="${mapContainerId}-svg"
+            viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"
+            style="position:absolute;top:0;left:0;width:100%;height:100%;overflow:visible;">
+            ${svgRoute}
+          </svg>
+        </div>`;
 
-    // Map wrapper
-    const mapContainerId = `rh-map-${this._config.entity.replace(/[^a-z0-9]/gi, "_")}`;
-    const mapHtml = `
-      <div style="position:relative;width:100%;padding-bottom:75%;overflow:hidden;border-radius:${noBg ? "0" : "var(--ha-card-border-radius,12px)"};">
-        ${showMap ? `<canvas id="${mapContainerId}" style="position:absolute;top:0;left:0;width:100%;height:100%;"></canvas>` : ""}
-        <svg id="${mapContainerId}-svg"
-          viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"
-          style="position:absolute;top:0;left:0;width:100%;height:100%;overflow:visible;">
-          ${svgRoute}
-        </svg>
-      </div>`;
+      // Draw tile map after DOM update
+      if (showMap && coords.length >= 2) {
+        requestAnimationFrame(() => this._drawMap(coords, mapContainerId));
+      }
+    }
+
+    // ── History section ────────────────────────────────────────────────────
+    let historyHtml = "";
+    if (historyRows && historyRows.length > 0) {
+      const rowsHtml = historyRows.map((row) => {
+        const hIcon = typeof row.icon === "string" ? row.icon.trim() : "";
+        const hPrimary = row.primary || "";
+        const hSecondary = row.secondary || "";
+        const iconCell = hIcon
+          ? `<ha-icon icon="${hIcon}" style="--mdi-icon-size:24px;color:${color};grid-row:1/3;align-self:center;"></ha-icon>`
+          : `<div style="grid-row:1/3;"></div>`;
+        const primaryCell = hPrimary
+          ? `<div style="font-size:13px;font-weight:700;color:${color};line-height:1.2;align-self:end;">${hPrimary}</div>`
+          : `<div></div>`;
+        const secondaryCell = hSecondary
+          ? `<div style="font-size:11px;font-weight:500;color:${color};opacity:0.7;line-height:1.2;align-self:start;">${hSecondary}</div>`
+          : `<div></div>`;
+        return `<div style="display:grid;grid-template-columns:28px 1fr;grid-template-rows:auto auto;column-gap:6px;padding:4px 0;border-top:1px solid var(--divider-color,rgba(255,255,255,0.1));">
+          ${iconCell}
+          ${primaryCell}
+          ${secondaryCell}
+        </div>`;
+      }).join("");
+      historyHtml = `<div style="padding:4px 14px 12px;">${rowsHtml}</div>`;
+    }
 
     this.innerHTML = `
       <ha-card${headerAttr} style="${cardStyle}">
-        ${textBlock}
+        ${primaryBlock}
         ${mapHtml}
+        ${historyHtml}
       </ha-card>
     `;
-
-    // Draw tile map if needed
-    if (showMap && coords.length >= 2) {
-      this._scheduleMapDraw(coords, mapContainerId);
-    }
   }
 
   // ─── SVG route overlay ────────────────────────────────────────────────────
@@ -495,15 +541,6 @@ class RHMapCard extends HTMLElement {
   }
 
   // ─── tile map drawing ─────────────────────────────────────────────────────
-
-  _scheduleMapDraw(coords, containerId) {
-    if (this._rafPending) return;
-    this._rafPending = true;
-    requestAnimationFrame(() => {
-      this._rafPending = false;
-      this._drawMap(coords, containerId);
-    });
-  }
 
   _drawMap(coords, containerId) {
     const canvas = this.querySelector(`#${CSS.escape(containerId)}`);
