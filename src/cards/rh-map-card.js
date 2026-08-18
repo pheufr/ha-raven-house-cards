@@ -42,7 +42,7 @@
  * to an attribute, and {{ bare_name }} to an attribute value directly.
  *
  * Special computed values available inside history templates:
- *   {{ pace }}   – distance/duration as MM:SS per km  (duration in seconds, distance in km)
+ *   {{ pace }}   – distance/duration as MM:SS per km  (duration in seconds, distance in metres)
  *   {{ duration_fmt }} – duration formatted as HH:MM:SS
  */
 class RHMapCard extends HTMLElement {
@@ -230,7 +230,8 @@ class RHMapCard extends HTMLElement {
       out.duration_fmt = this._formatDuration(item.duration);
     }
     if (item?.duration != null && item?.distance != null && Number(item.distance) > 0) {
-      const paceSecPerKm = Number(item.duration) / Number(item.distance);
+      const distanceKm = Number(item.distance) / 1000;
+      const paceSecPerKm = Number(item.duration) / distanceKm;
       out.pace = this._formatPace(paceSecPerKm);
     }
     return out;
@@ -281,6 +282,18 @@ class RHMapCard extends HTMLElement {
       if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(expr.trim())) {
         const val = attrs[expr.trim()];
         if (val !== undefined) return val;
+      }
+
+      // General expression: evaluate with attribute values as local variables
+      try {
+        const keys = Object.keys(attrs);
+        const values = keys.map((k) => attrs[k]);
+        // eslint-disable-next-line no-new-func
+        const fn = new Function(...keys, `return (${expr.trim()});`);
+        const result = fn(...values);
+        if (result !== undefined && result !== null) return result;
+      } catch (_) {
+        // fall through – return the unresolved token
       }
 
       return `{{ ${expr} }}`;
@@ -410,7 +423,7 @@ class RHMapCard extends HTMLElement {
 
     // ── Map section ────────────────────────────────────────────────────────
     let mapHtml = "";
-    if (this._config.map_entity) {
+    if (this._config.map_entity && coords.length >= 2) {
       const svgRoute = this._buildRouteSvg(coords, color);
       const mapContainerId = `rh-map-${(this._config.map_entity || "").replace(/[^a-z0-9]/gi, "_")}`;
       mapHtml = `

@@ -2289,7 +2289,8 @@
         out.duration_fmt = this._formatDuration(item.duration);
       }
       if (item?.duration != null && item?.distance != null && Number(item.distance) > 0) {
-        const paceSecPerKm = Number(item.duration) / Number(item.distance);
+        const distanceKm = Number(item.distance) / 1e3;
+        const paceSecPerKm = Number(item.duration) / distanceKm;
         out.pace = this._formatPace(paceSecPerKm);
       }
       return out;
@@ -2330,6 +2331,14 @@
         if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(expr.trim())) {
           const val = attrs[expr.trim()];
           if (val !== void 0) return val;
+        }
+        try {
+          const keys = Object.keys(attrs);
+          const values = keys.map((k) => attrs[k]);
+          const fn = new Function(...keys, `return (${expr.trim()});`);
+          const result = fn(...values);
+          if (result !== void 0 && result !== null) return result;
+        } catch (_2) {
         }
         return `{{ ${expr} }}`;
       });
@@ -2427,7 +2436,7 @@
            ${primaryIconHtml}${primaryTextHtml}${primarySecondaryHtml}
          </div>` : "";
       let mapHtml = "";
-      if (this._config.map_entity) {
+      if (this._config.map_entity && coords.length >= 2) {
         const svgRoute = this._buildRouteSvg(coords, color);
         const mapContainerId = `rh-map-${(this._config.map_entity || "").replace(/[^a-z0-9]/gi, "_")}`;
         mapHtml = `
