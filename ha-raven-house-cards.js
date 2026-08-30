@@ -2155,6 +2155,9 @@
         show_map: safe.show_map !== false,
         zoom: Number(safe.zoom) > 0 ? Number(safe.zoom) : 13,
         route_width: Number(safe.route_width) > 0 ? Number(safe.route_width) : 3,
+        max_route_points: Number(safe.max_route_points) > 1 ? Number(safe.max_route_points) : 1200,
+        max_decoded_points: Number(safe.max_decoded_points) > 1 ? Number(safe.max_decoded_points) : 2e4,
+        max_map_tiles: Number(safe.max_map_tiles) > 0 ? Number(safe.max_map_tiles) : 64,
         map_tile_url: typeof safe.map_tile_url === "string" ? safe.map_tile_url : "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
         history_limit: Number(safe.history_limit) > 0 ? Number(safe.history_limit) : 5,
         ...safe
@@ -2380,10 +2383,11 @@
     _decodePolyline(encoded) {
       if (!encoded) return [];
       const coords = [];
+      const maxDecodedPoints = Number(this._config?.max_decoded_points) > 1 ? Number(this._config.max_decoded_points) : 2e4;
       let index = 0;
       let lat = 0;
       let lng = 0;
-      while (index < encoded.length) {
+      while (index < encoded.length && coords.length < maxDecodedPoints) {
         let b;
         let shift = 0;
         let result = 0;
@@ -2407,6 +2411,20 @@
       }
       return coords;
     }
+    _simplifyCoords(coords, maxPoints) {
+      if (!Array.isArray(coords)) return [];
+      const limit = Number(maxPoints) > 1 ? Math.floor(Number(maxPoints)) : 1200;
+      if (coords.length <= limit) return coords;
+      if (limit <= 2) return [coords[0], coords[coords.length - 1]];
+      const out = [coords[0]];
+      const step = (coords.length - 1) / (limit - 1);
+      for (let i = 1; i < limit - 1; i++) {
+        const idx = Math.min(coords.length - 2, Math.max(1, Math.round(i * step)));
+        out.push(coords[idx]);
+      }
+      out.push(coords[coords.length - 1]);
+      return out;
+    }
     // ─── Mercator tile maths ──────────────────────────────────────────────────
     _latLngToTile(lat, lng, zoom) {
       const n = Math.pow(2, zoom);
@@ -2424,11 +2442,13 @@
     }
     // ─── render key ───────────────────────────────────────────────────────────
     _buildRenderKey(primary, secondary, icon, historyRows) {
+      const polyline = this._polylineString();
+      const polylineSig = polyline.length <= 160 ? polyline : `${polyline.length}:${polyline.slice(0, 80)}:${polyline.slice(-80)}`;
       return [
         this._config?.primary_entity,
         this._config?.history_entity,
         this._config?.map_entity,
-        this._polylineString(),
+        polylineSig,
         primary,
         secondary,
         icon,
@@ -2443,8 +2463,12 @@
     _render(primary, secondary, icon, historyRows) {
       const color = this._fgColor();
       const polylineStr = this._polylineString();
-      const coords = this._decodePolyline(polylineStr);
-      const showMap = this._config.show_map !== false && this._config.map_entity;
+      const decodedCoords = this._decodePolyline(polylineStr);
+      const coords = this._simplifyCoords(decodedCoords, this._config.max_route_points);
+      const wantsMap = this._config.show_map !== false && this._config.map_entity;
+      const maxTiles = Number(this._config.max_map_tiles) > 0 ? Number(this._config.max_map_tiles) : 64;
+      const tileCount = wantsMap ? this._estimateTileCount(coords, this._config.zoom) : 0;
+      const showMap = wantsMap && tileCount > 0 && tileCount <= maxTiles;
       const iconStr = typeof icon === "string" ? icon.trim() : "";
       const title = this._config.title;
       const headerAttr = title !== void 0 && title !== "" ? ` header="${title}"` : "";
@@ -2463,6 +2487,7 @@
         mapHtml = `
         <div style="position:relative;width:100%;padding-bottom:75%;overflow:hidden;border-radius:var(--ha-card-border-radius,12px);">
           ${showMap ? `<canvas id="${mapContainerId}" style="position:absolute;top:0;left:0;width:100%;height:100%;"></canvas>` : ""}
+          ${wantsMap && !showMap ? `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:${color};opacity:0.6;background:rgba(0,0,0,0.04);">Map background disabled for large route bounds</div>` : ""}
           <svg id="${mapContainerId}-svg"
             viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"
             style="position:absolute;top:0;left:0;width:100%;height:100%;overflow:visible;">
@@ -2561,6 +2586,20 @@
     `;
     }
     // ─── tile map drawing ─────────────────────────────────────────────────────
+    _estimateTileCount(coords, zoom) {
+      if (!Array.isArray(coords) || coords.length < 2 || !Number.isFinite(Number(zoom))) return 0;
+      const lats = coords.map((c) => c[0]);
+      const lngs = coords.map((c) => c[1]);
+      const minLat = Math.min(...lats);
+      const maxLat = Math.max(...lats);
+      const minLng = Math.min(...lngs);
+      const maxLng = Math.max(...lngs);
+      const topLeft = this._latLngToTile(maxLat, minLng, zoom);
+      const bottomRight = this._latLngToTile(minLat, maxLng, zoom);
+      const tilesX = Math.abs(Math.floor(bottomRight.x) - Math.floor(topLeft.x)) + 1;
+      const tilesY = Math.abs(Math.floor(bottomRight.y) - Math.floor(topLeft.y)) + 1;
+      return tilesX * tilesY;
+    }
     _drawMap(coords, containerId) {
       const canvas = this.querySelector(`#${CSS.escape(containerId)}`);
       if (!canvas) return;
@@ -2580,6 +2619,9 @@
       const TILE_SIZE = 256;
       const tilesX = tileX1 - tileX0 + 1;
       const tilesY = tileY1 - tileY0 + 1;
+      const tileCount = tilesX * tilesY;
+      const maxTiles = Number(this._config?.max_map_tiles) > 0 ? Number(this._config.max_map_tiles) : 64;
+      if (tileCount > maxTiles) return;
       const mapW = tilesX * TILE_SIZE;
       const mapH = tilesY * TILE_SIZE;
       const pad = 0.1;
