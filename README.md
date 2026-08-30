@@ -275,6 +275,7 @@ Map card settings:
 - `history_entity` (string): Entity containing an activity array for history rows (from state JSON or an array attribute).
 - `map_entity` (string): Entity whose state or attributes contain the encoded polyline.
 - `polyline_attribute` (string): Attribute name to read the polyline from `map_entity` (optional).
+- `polyline_precision` (number, optional): Force polyline precision digits (typically `5` or `6`); when omitted the card auto-detects the best precision.
 - `title` (string): Card header. Use `""` to suppress.
 - `color` / `fg_color` (string, default theme primary color): Route and text colour.
 - `route_width` (number, default `3`): Stroke width of the route line.
