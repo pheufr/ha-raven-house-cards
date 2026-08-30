@@ -287,16 +287,14 @@ class RHMapCard extends HTMLElement {
         if (val !== undefined) return val;
       }
 
+      const piped = this._evalExpressionWithFilters(expr.trim(), attrs);
+      if (piped.ok) return piped.value;
+
       // General expression: evaluate with attribute values as local variables.
       // Only pass keys that are valid JS identifiers to avoid SyntaxError in
       // new Function when the attrs object contains hyphenated or numeric keys.
       try {
-        const validIdRe = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
-        const keys = Object.keys(attrs).filter((k) => validIdRe.test(k));
-        const values = keys.map((k) => attrs[k]);
-        // eslint-disable-next-line no-new-func
-        const fn = new Function(...keys, `return (${expr.trim()});`);
-        const result = fn(...values);
+        const result = this._evalJsExpression(expr.trim(), attrs);
         if (result !== undefined && result !== null) return result;
       } catch (_) {
         // fall through – return the unresolved token
@@ -304,6 +302,91 @@ class RHMapCard extends HTMLElement {
 
       return `{{ ${expr} }}`;
     });
+  }
+
+  _evalJsExpression(expr, attrs) {
+    const validIdRe = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+    const keys = Object.keys(attrs).filter((k) => validIdRe.test(k));
+    const values = keys.map((k) => attrs[k]);
+    // eslint-disable-next-line no-new-func
+    const fn = new Function(...keys, `return (${expr});`);
+    return fn(...values);
+  }
+
+  _splitJinjaFilters(expr) {
+    const parts = [];
+    let current = "";
+    let depth = 0;
+    let quote = null;
+    for (let i = 0; i < expr.length; i++) {
+      const ch = expr[i];
+      if (quote) {
+        current += ch;
+        if (ch === quote && expr[i - 1] !== "\\") quote = null;
+        continue;
+      }
+      if (ch === "'" || ch === "\"") {
+        quote = ch;
+        current += ch;
+        continue;
+      }
+      if (ch === "(") depth++;
+      if (ch === ")") depth = Math.max(0, depth - 1);
+      if (ch === "|" && depth === 0) {
+        parts.push(current.trim());
+        current = "";
+        continue;
+      }
+      current += ch;
+    }
+    parts.push(current.trim());
+    return parts.filter(Boolean);
+  }
+
+  _applyJinjaFilter(value, filterExpr) {
+    const m = filterExpr.match(/^([a-zA-Z_][a-zA-Z0-9_]*)(?:\(([\s\S]*)\))?$/);
+    if (!m) return { ok: false };
+    const name = m[1];
+    const args = m[2] ?? "";
+    if (name === "int") {
+      if (value == null || value === "") return { ok: true, value: 0 };
+      const asNumber = Number(value);
+      if (Number.isNaN(asNumber)) {
+        const parsed = parseInt(String(value), 10);
+        return { ok: true, value: Number.isNaN(parsed) ? 0 : parsed };
+      }
+      return { ok: true, value: asNumber < 0 ? Math.ceil(asNumber) : Math.floor(asNumber) };
+    }
+    if (name === "float") {
+      const asNumber = Number(value);
+      return { ok: true, value: Number.isNaN(asNumber) ? 0 : asNumber };
+    }
+    if (name === "round") {
+      const precision = args ? Number(args.split(",")[0].trim()) : 0;
+      const p = Number.isFinite(precision) ? Math.max(0, Math.floor(precision)) : 0;
+      const factor = Math.pow(10, p);
+      const asNumber = Number(value);
+      if (Number.isNaN(asNumber)) return { ok: true, value: 0 };
+      return { ok: true, value: Math.round(asNumber * factor) / factor };
+    }
+    return { ok: false };
+  }
+
+  _evalExpressionWithFilters(expr, attrs) {
+    const parts = this._splitJinjaFilters(expr);
+    if (parts.length <= 1) return { ok: false };
+    let value;
+    try {
+      value = this._evalJsExpression(parts[0], attrs);
+    } catch (_) {
+      return { ok: false };
+    }
+    for (let i = 1; i < parts.length; i++) {
+      const next = this._applyJinjaFilter(value, parts[i]);
+      if (!next.ok) return { ok: false };
+      value = next.value;
+    }
+    return { ok: true, value: value == null ? "" : value };
   }
 
   /**
@@ -384,15 +467,120 @@ class RHMapCard extends HTMLElement {
   _simplifyCoords(coords, maxPoints) {
     if (!Array.isArray(coords)) return [];
     const limit = Number(maxPoints) > 1 ? Math.floor(Number(maxPoints)) : 1200;
-    if (coords.length <= limit) return coords;
-    if (limit <= 2) return [coords[0], coords[coords.length - 1]];
-    const out = [coords[0]];
-    const step = (coords.length - 1) / (limit - 1);
-    for (let i = 1; i < limit - 1; i++) {
-      const idx = Math.min(coords.length - 2, Math.max(1, Math.round(i * step)));
-      out.push(coords[idx]);
+    if (coords.length <= 2) return coords;
+    const target = Math.max(2, limit);
+    const projected = this._projectCoords(coords, 1000, 750, 40);
+    if (!projected || projected.length !== coords.length) return coords.slice(0, target);
+
+    const simplify = (epsilon) => this._rdpByPixelDistance(coords, projected, epsilon);
+    let simplified = simplify(1.25);
+    if (simplified.length > target) {
+      let low = 1.25;
+      let high = 1.25;
+      while (high < 128) {
+        const next = simplify(high);
+        if (next.length <= target) {
+          simplified = next;
+          break;
+        }
+        high *= 2;
+      }
+      for (let i = 0; i < 8 && simplified.length > target; i++) {
+        const mid = (low + high) / 2;
+        const next = simplify(mid);
+        if (next.length <= target) {
+          high = mid;
+          simplified = next;
+        } else {
+          low = mid;
+        }
+      }
     }
-    out.push(coords[coords.length - 1]);
+    if (simplified.length <= target) return simplified;
+    if (target <= 2) return [simplified[0], simplified[simplified.length - 1]];
+    const out = [simplified[0]];
+    const step = (simplified.length - 1) / (target - 1);
+    for (let i = 1; i < target - 1; i++) {
+      const idx = Math.min(simplified.length - 2, Math.max(1, Math.round(i * step)));
+      out.push(simplified[idx]);
+    }
+    out.push(simplified[simplified.length - 1]);
+    return out;
+  }
+
+  _projectCoords(coords, width, height, pad) {
+    if (!Array.isArray(coords) || coords.length < 2) return null;
+    const project = (lat, lng) => {
+      const latClamped = Math.max(-85, Math.min(85, Number(lat)));
+      const latRad = (latClamped * Math.PI) / 180;
+      return {
+        x: Number(lng),
+        y: (Math.log(Math.tan(Math.PI / 4 + latRad / 2)) * 180) / Math.PI,
+      };
+    };
+    const projected = coords.map(([lat, lng]) => project(lat, lng));
+    const xs = projected.map((p) => p.x);
+    const ys = projected.map((p) => p.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const rangeX = maxX - minX || 1;
+    const rangeY = maxY - minY || 1;
+    const drawW = width - pad * 2;
+    const drawH = height - pad * 2;
+    const scale = Math.min(drawW / rangeX, drawH / rangeY);
+    const offsetX = pad + (drawW - rangeX * scale) / 2;
+    const offsetY = pad + (drawH - rangeY * scale) / 2;
+    return projected.map((p) => ({
+      x: offsetX + (p.x - minX) * scale,
+      y: offsetY + (maxY - p.y) * scale,
+    }));
+  }
+
+  _pointToSegmentSqDistance(p, a, b) {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    if (dx === 0 && dy === 0) {
+      const px = p.x - a.x;
+      const py = p.y - a.y;
+      return px * px + py * py;
+    }
+    const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy)));
+    const projX = a.x + t * dx;
+    const projY = a.y + t * dy;
+    const distX = p.x - projX;
+    const distY = p.y - projY;
+    return distX * distX + distY * distY;
+  }
+
+  _rdpByPixelDistance(coords, projected, epsilonPx) {
+    if (coords.length <= 2) return coords;
+    const sqEps = epsilonPx * epsilonPx;
+    const keep = new Uint8Array(coords.length);
+    keep[0] = 1;
+    keep[coords.length - 1] = 1;
+    const stack = [[0, coords.length - 1]];
+    while (stack.length) {
+      const [start, end] = stack.pop();
+      let maxSq = -1;
+      let index = -1;
+      for (let i = start + 1; i < end; i++) {
+        const sq = this._pointToSegmentSqDistance(projected[i], projected[start], projected[end]);
+        if (sq > maxSq) {
+          maxSq = sq;
+          index = i;
+        }
+      }
+      if (index !== -1 && maxSq > sqEps) {
+        keep[index] = 1;
+        stack.push([start, index], [index, end]);
+      }
+    }
+    const out = [];
+    for (let i = 0; i < coords.length; i++) {
+      if (keep[i]) out.push(coords[i]);
+    }
     return out;
   }
 

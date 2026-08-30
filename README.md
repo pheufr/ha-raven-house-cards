@@ -289,9 +289,13 @@ Map card settings:
 - `history_primary` (string): Primary text template for each history row.
 - `history_secondary` (string): Secondary text template for each history row.
 - `history_limit` (number, default `5`): Maximum number of history rows rendered.
-- `max_route_points` (number, default `1200`): Route point cap for rendering to avoid UI slowdowns on long activities.
+- `max_route_points` (number, default `1200`): Upper cap for rendered route points after adaptive screen-space simplification to preserve complex route shapes.
 - `max_decoded_points` (number, default `20000`): Hard cap while decoding encoded polylines.
 - `max_map_tiles` (number, default `64`): Tile-map cap; when exceeded, the card renders only the route overlay to protect frontend performance.
+
+Template notes:
+
+- Jinja-style numeric filters like `| int`, `| float`, and `| round(...)` are supported in card templates for both primary and history text fields.
 
 ## Example Dashboard
 
