@@ -2460,12 +2460,12 @@
     // ─── polyline decoding (Google Encoded Polyline Algorithm) ────────────────
     _decodePolyline(encoded) {
       if (!encoded) return [];
-      const coords = [];
+      const raw = [];
       const maxDecodedPoints = Number(this._config?.max_decoded_points) > 1 ? Number(this._config.max_decoded_points) : 2e4;
       let index = 0;
       let lat = 0;
       let lng = 0;
-      while (index < encoded.length && coords.length < maxDecodedPoints) {
+      while (index < encoded.length && raw.length < maxDecodedPoints) {
         let b;
         let shift = 0;
         let result = 0;
@@ -2485,9 +2485,38 @@
         } while (b >= 32);
         const dlng = result & 1 ? ~(result >> 1) : result >> 1;
         lng += dlng;
-        coords.push([lat / 1e5, lng / 1e5]);
+        raw.push([lat, lng]);
       }
-      return coords;
+      if (!raw.length) return [];
+      const toScaledCoords = (precision) => {
+        const scale = 10 ** precision;
+        return raw.map(([rawLat, rawLng]) => [rawLat / scale, rawLng / scale]);
+      };
+      const validRatio = (coords) => {
+        if (!coords.length) return 0;
+        let valid = 0;
+        for (const [cLat, cLng] of coords) {
+          if (!Number.isFinite(cLat) || !Number.isFinite(cLng)) continue;
+          if (Math.abs(cLat) <= 90 && Math.abs(cLng) <= 180) valid += 1;
+        }
+        return valid / coords.length;
+      };
+      const configuredPrecision = Number(this._config?.polyline_precision);
+      const hasConfiguredPrecision = Number.isInteger(configuredPrecision) && configuredPrecision >= 0 && configuredPrecision <= 10;
+      const candidates = hasConfiguredPrecision ? [configuredPrecision] : [5, 6];
+      let best = toScaledCoords(candidates[0]);
+      let bestRatio = validRatio(best);
+      for (let i = 1; i < candidates.length; i++) {
+        const next = toScaledCoords(candidates[i]);
+        const ratio = validRatio(next);
+        if (ratio > bestRatio) {
+          best = next;
+          bestRatio = ratio;
+        }
+      }
+      return best.filter(
+        ([cLat, cLng]) => Number.isFinite(cLat) && Number.isFinite(cLng) && Math.abs(cLat) <= 90 && Math.abs(cLng) <= 180
+      );
     }
     _simplifyCoords(coords, maxPoints) {
       if (!Array.isArray(coords)) return [];
@@ -2718,8 +2747,10 @@
       const H = 750;
       const pad = 40;
       const project = (lat, lng) => {
-        const latRad = lat * Math.PI / 180;
-        const mx = lng;
+        const latClamped = Math.max(-85, Math.min(85, Number(lat)));
+        const lngValue = Number(lng);
+        const latRad = latClamped * Math.PI / 180;
+        const mx = lngValue;
         const my = Math.log(Math.tan(Math.PI / 4 + latRad / 2)) * 180 / Math.PI;
         return { mx, my };
       };
