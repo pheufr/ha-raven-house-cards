@@ -238,49 +238,60 @@ The card stays transparent apart from the header and the note text itself, and i
 
 ### RH Map
 
-Renders a GPS route from a polyline-encoded entity as an SVG path overlaid on an optional tile-map background.  Supports template strings in `primary`, `secondary`, and `icon` — any valid Home Assistant Jinja2 expression works, including conditionals and filters.
+Renders a GPS route from a polyline-encoded entity as an SVG path overlaid on an optional tile-map background.
 
 ```yaml
 type: custom:rh-map-card
-entity: sensor.last_workout
-polyline_attribute: route_polyline
-title: Last Workout
+title: Garmin Last Activity
+primary_entity: sensor.garmin_connect_last_activity
+map_entity: sensor.garmin_connect_last_activity_route
+polyline_attribute: polyline
 color: "#e06c00"
 zoom: 14
 icon: >-
-  {% if is_state_attr('sensor.last_workout', 'activity_type', 'strength_training') %}
+  {% if is_state_attr(entity, 'type', 'strength_training') %}
     mdi:dumbbell
   {% else %}
     mdi:run
   {% endif %}
 primary: >-
-  {% if is_state_attr('sensor.last_workout', 'activity_type', 'strength_training') %}
-    {{ state_attr('sensor.last_workout', 'total_sets') }} sets · {{ state_attr('sensor.last_workout', 'total_reps') }} reps
+  {% if is_state_attr(entity, 'type', 'strength_training') %}
+    {{ state_attr(entity, 'total_sets') }} sets · {{ state_attr(entity, 'total_reps') }} reps
   {% else %}
-    {{ state_attr('sensor.last_workout', 'pace') }} /km
+    {{ state_attr(entity, 'avg_pace') }}
   {% endif %}
 secondary: >-
-  {% if is_state_attr('sensor.last_workout', 'activity_type', 'strength_training') %}
-    {{ state_attr('sensor.last_workout', 'duration') }}
-  {% else %}
-    {{ state_attr('sensor.last_workout', 'distance') }} km · {{ state_attr('sensor.last_workout', 'duration') }}
-  {% endif %}
+  {{ state_attr(entity, 'distance') }} km · {{ state_attr(entity, 'duration') }}
+history_entity: sensor.garmin_connect_activities
+history_limit: 5
+history_icon: mdi:history
+history_primary: "{{ type | replace('_',' ') | title }}"
+history_secondary: "{{ distance }} km · {{ duration_fmt }} · {{ pace }}/km"
 ```
 
 Map card settings:
 
-- `entity` (string, **required**): Entity whose state (or a named attribute) holds the encoded polyline string.
-- `polyline_attribute` (string): Attribute name to read the polyline from.  Omit to use the entity state directly.
-- `title` (string): Card header.  Use `""` to suppress.
+- `primary_entity` (string): Entity used for `icon`, `primary`, and `secondary` templates.
+- `history_entity` (string): Entity containing an activity array for history rows (from state JSON or an array attribute).
+- `map_entity` (string): Entity whose state or attributes contain the encoded polyline.
+- `polyline_attribute` (string): Attribute name to read the polyline from `map_entity` (optional).
+- `title` (string): Card header. Use `""` to suppress.
 - `color` / `fg_color` (string, default theme primary color): Route and text colour.
 - `route_width` (number, default `3`): Stroke width of the route line.
 - `show_map` (boolean, default `true`): Whether to render the tile-map background.
 - `map_tile_url` (string, default OpenStreetMap): Tile server URL template with `{z}`, `{x}`, `{y}` placeholders.
 - `zoom` (number, default `13`): Tile zoom level for the background map.
-- `bg_color` (string): Explicit card background colour (only used when `show_map` is `false`).
-- `icon` (string): MDI icon name, e.g. `mdi:run`.  Supports templates.
-- `primary` (string): Primary text displayed above the map.  Supports full Jinja2 templates.
-- `secondary` (string): Secondary text displayed below the primary text.  Supports full Jinja2 templates.
+- `bg_color` (string): Explicit card background colour (used when `show_map` is `false`).
+- `icon` (string): MDI icon name or template.
+- `primary` (string): Primary text above the map (supports templates).
+- `secondary` (string): Secondary text below the primary text (supports templates).
+- `history_icon` (string): Icon template for each history row.
+- `history_primary` (string): Primary text template for each history row.
+- `history_secondary` (string): Secondary text template for each history row.
+- `history_limit` (number, default `5`): Maximum number of history rows rendered.
+- `max_route_points` (number, default `1200`): Route point cap for rendering to avoid UI slowdowns on long activities.
+- `max_decoded_points` (number, default `20000`): Hard cap while decoding encoded polylines.
+- `max_map_tiles` (number, default `64`): Tile-map cap; when exceeded, the card renders only the route overlay to protect frontend performance.
 
 ## Example Dashboard
 
