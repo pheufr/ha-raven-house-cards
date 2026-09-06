@@ -195,7 +195,12 @@ class RHJobsCard extends HTMLElement {
   _renderJobTile(job, showImages) {
     const orientation = this._orientation();
     const tileDirection = showImages ? (orientation === "horizontal" ? "row" : "column") : "row";
-    const tileWidth = showImages && orientation === "horizontal" ? "width:100%;" : orientation === "horizontal" ? "min-width:260px;" : "width:100%;";
+    const tileWidth =
+      showImages && orientation === "horizontal"
+        ? "flex:1 1 260px;min-width:220px;max-width:100%;"
+        : orientation === "horizontal"
+          ? "min-width:260px;"
+          : "width:100%;";
     const isHorizontal = orientation === "horizontal";
     const imgWidth = "100%";
     const imgMaxWidth = isHorizontal ? "100%" : "320px";
@@ -261,9 +266,7 @@ class RHJobsCard extends HTMLElement {
     const orientation = this._orientation();
     const listStyle =
       orientation === "horizontal"
-        ? showImages
-          ? "display:flex;flex-direction:column;gap:12px;padding:4px 0;"
-          : "display:flex;flex-wrap:wrap;gap:12px;padding:4px 0;align-items:flex-start;"
+        ? "display:flex;flex-wrap:wrap;gap:12px;padding:4px 0;align-items:flex-start;"
         : "display:flex;flex-direction:column;gap:12px;padding:4px 0;";
 
     return `
@@ -346,4 +349,3 @@ if (!window.customCards.find((card) => card.type === "rh-jobs-card")) {
     description: "Shows due Raven House Jobs with images",
   });
 }
-
