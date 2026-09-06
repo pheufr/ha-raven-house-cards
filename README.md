@@ -53,11 +53,22 @@ npm run build
 ```yaml
 type: custom:rh-jobs-card
 show_images: true
-orientation: vertical
+horizontal: true
 job_entities:
   - binary_sensor.rh_jobs_trash_day
   - binary_sensor.rh_jobs_laundry
 ```
+
+Jobs card settings:
+
+- `title` (string, default `RH Jobs`): Card header. Use `""` to hide the header.
+- `show_images` (boolean, default `true`): Show each job as an image/icon tile.
+- `show_all` (boolean, default `false`): Include jobs that are not due.
+- `job_entities` (string array, optional): Explicit list of job entities to render.
+- `validation_required` (boolean, default `false`): Require a confirm/cancel click before completing a job.
+- `orientation` (`vertical` or `horizontal`, default `vertical`): Layout mode for the card.
+- `horizontal` (boolean, default `false`): Shorthand for `orientation: horizontal`.
+- Horizontal picture mode (`orientation: horizontal` or `horizontal: true` with `show_images: true`) renders landscape image tiles in horizontal rows that wrap to fill available card width.
 
 ### RH Quiz Summary
 
