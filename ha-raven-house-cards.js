@@ -46,6 +46,9 @@
       return !["off", "unavailable", "unknown", "none"].includes(state.state);
     }
     _orientation() {
+      if (this._config.horizontal === true) {
+        return "horizontal";
+      }
       return this._config.orientation === "horizontal" ? "horizontal" : "vertical";
     }
     _formatTriggered(lastTriggered) {
@@ -158,22 +161,23 @@
     _renderJobTile(job, showImages) {
       const orientation = this._orientation();
       const tileDirection = showImages ? orientation === "horizontal" ? "row" : "column" : "row";
-      const tileWidth = orientation === "horizontal" ? "min-width:260px;" : "width:100%;";
+      const tileWidth = showImages && orientation === "horizontal" ? "width:100%;" : orientation === "horizontal" ? "min-width:260px;" : "width:100%;";
       const isHorizontal = orientation === "horizontal";
-      const imgSize = isHorizontal ? "96px" : "100%";
-      const imgMaxWidth = isHorizontal ? "96px" : "320px";
+      const imgWidth = "100%";
+      const imgMaxWidth = isHorizontal ? "100%" : "320px";
+      const imgAspectRatio = isHorizontal ? "16 / 9" : "auto";
       const iconBg = job.colour || "var(--primary-color)";
       const iconStyle = `color:${iconBg};--mdi-icon-size:28px;`;
       const fallbackIcon = job.icon || "mdi:clipboard-text-clock";
       if (showImages && job.image) {
         return `
         <button style="cursor:pointer;border:0;padding:0;background:transparent;box-shadow:none;font:inherit;display:flex;${tileWidth}" class="job-image-container" data-entity-id="${job.entityId}" data-job-name="${job.name}" title="${job.name}">
-          <img src="${job.image}" alt="${job.name}" style="width:${imgSize};max-width:${imgMaxWidth};height:${isHorizontal ? "96px" : "auto"};aspect-ratio:${isHorizontal ? "1 / 1" : "auto"};object-fit:cover;display:block;border-radius:10px;" onerror="this.style.display='none'" />
+          <img src="${job.image}" alt="${job.name}" style="width:${imgWidth};max-width:${imgMaxWidth};height:auto;aspect-ratio:${imgAspectRatio};object-fit:cover;display:block;border-radius:10px;" onerror="this.style.display='none'" />
         </button>
       `;
       }
       if (showImages) {
-        const iconBoxStyle = `aspect-ratio:1 / 1;width:${isHorizontal ? "96px" : "100%"};max-width:${isHorizontal ? "96px" : "320px"};min-width:${isHorizontal ? "96px" : "0"};border-radius:12px;background:${iconBg};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:8px;box-sizing:border-box;`;
+        const iconBoxStyle = `aspect-ratio:${isHorizontal ? "16 / 9" : "1 / 1"};width:${isHorizontal ? "100%" : "100%"};max-width:${isHorizontal ? "100%" : "320px"};min-width:${isHorizontal ? "0" : "0"};border-radius:12px;background:${iconBg};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:8px;box-sizing:border-box;`;
         return `
         <button style="cursor:pointer;border:0;padding:0;background:transparent;box-shadow:none;font:inherit;display:flex;${tileWidth}" class="job-image-container" data-entity-id="${job.entityId}" data-job-name="${job.name}" title="${job.name}">
           <div style="${iconBoxStyle}">
@@ -214,7 +218,7 @@
       }
       const jobsHtml = jobs.map((job) => this._renderJobTile(job, showImages)).join("");
       const orientation = this._orientation();
-      const listStyle = orientation === "horizontal" ? "display:flex;flex-wrap:wrap;gap:12px;padding:4px 0;align-items:flex-start;" : "display:flex;flex-direction:column;gap:12px;padding:4px 0;";
+      const listStyle = orientation === "horizontal" ? showImages ? "display:flex;flex-direction:column;gap:12px;padding:4px 0;" : "display:flex;flex-wrap:wrap;gap:12px;padding:4px 0;align-items:flex-start;" : "display:flex;flex-direction:column;gap:12px;padding:4px 0;";
       return `
       ${this._pendingConfirmEntityId ? this._renderConfirmBanner() : ""}
       <div style="${listStyle}">
