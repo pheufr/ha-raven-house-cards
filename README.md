@@ -68,7 +68,7 @@ Jobs card settings:
 - `validation_required` (boolean, default `false`): Require a confirm/cancel click before completing a job.
 - `orientation` (`vertical` or `horizontal`, default `vertical`): Layout mode for the card.
 - `horizontal` (boolean, default `false`): Shorthand for `orientation: horizontal`.
-- Horizontal picture mode (`orientation: horizontal` or `horizontal: true` with `show_images: true`) renders landscape image tiles in horizontal rows that wrap to fill available card width.
+- Horizontal picture mode (`orientation: horizontal` or `horizontal: true` with `show_images: true`) renders fixed-size landscape image tiles in a single horizontal row with sideways scrolling when needed.
 
 ### RH Quiz Summary
 
