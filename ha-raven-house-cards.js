@@ -161,10 +161,10 @@
     _renderJobTile(job, showImages) {
       const orientation = this._orientation();
       const tileDirection = showImages ? orientation === "horizontal" ? "row" : "column" : "row";
-      const tileWidth = showImages && orientation === "horizontal" ? "flex:1 1 260px;min-width:220px;max-width:100%;" : orientation === "horizontal" ? "min-width:260px;" : "width:100%;";
       const isHorizontal = orientation === "horizontal";
-      const imgWidth = "100%";
-      const imgMaxWidth = isHorizontal ? "100%" : "320px";
+      const tileWidth = isHorizontal ? "flex:0 0 auto;min-width:260px;" : "width:100%;";
+      const imgWidth = isHorizontal ? "260px" : "100%";
+      const imgMaxWidth = isHorizontal ? "260px" : "320px";
       const imgAspectRatio = isHorizontal ? "16 / 9" : "auto";
       const iconBg = job.colour || "var(--primary-color)";
       const iconStyle = `color:${iconBg};--mdi-icon-size:28px;`;
@@ -177,7 +177,7 @@
       `;
       }
       if (showImages) {
-        const iconBoxStyle = `aspect-ratio:${isHorizontal ? "16 / 9" : "1 / 1"};width:${isHorizontal ? "100%" : "100%"};max-width:${isHorizontal ? "100%" : "320px"};min-width:${isHorizontal ? "0" : "0"};border-radius:12px;background:${iconBg};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:8px;box-sizing:border-box;`;
+        const iconBoxStyle = `aspect-ratio:${isHorizontal ? "16 / 9" : "1 / 1"};width:${isHorizontal ? "260px" : "100%"};max-width:${isHorizontal ? "260px" : "320px"};min-width:0;border-radius:12px;background:${iconBg};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:8px;box-sizing:border-box;`;
         return `
         <button style="cursor:pointer;border:0;padding:0;background:transparent;box-shadow:none;font:inherit;display:flex;${tileWidth}" class="job-image-container" data-entity-id="${job.entityId}" data-job-name="${job.name}" title="${job.name}">
           <div style="${iconBoxStyle}">
@@ -218,7 +218,7 @@
       }
       const jobsHtml = jobs.map((job) => this._renderJobTile(job, showImages)).join("");
       const orientation = this._orientation();
-      const listStyle = orientation === "horizontal" ? "display:flex;flex-wrap:wrap;gap:12px;padding:4px 0;align-items:flex-start;" : "display:flex;flex-direction:column;gap:12px;padding:4px 0;";
+      const listStyle = orientation === "horizontal" ? "display:flex;flex-wrap:nowrap;gap:12px;padding:4px 0 8px;align-items:flex-start;overflow-x:auto;overflow-y:hidden;" : "display:flex;flex-direction:column;gap:12px;padding:4px 0;";
       return `
       ${this._pendingConfirmEntityId ? this._renderConfirmBanner() : ""}
       <div style="${listStyle}">
