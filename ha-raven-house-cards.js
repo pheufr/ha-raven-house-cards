@@ -165,14 +165,15 @@
       const tileWidth = isHorizontal ? "flex:0 0 auto;min-width:260px;" : "width:100%;";
       const imgWidth = isHorizontal ? "260px" : "100%";
       const imgMaxWidth = isHorizontal ? "260px" : "320px";
-      const imgAspectRatio = isHorizontal ? "16 / 9" : "auto";
+      const imgMaxHeight = isHorizontal ? "260px" : "none";
+      const imgFit = isHorizontal ? "contain" : "cover";
       const iconBg = job.colour || "var(--primary-color)";
       const iconStyle = `color:${iconBg};--mdi-icon-size:28px;`;
       const fallbackIcon = job.icon || "mdi:clipboard-text-clock";
       if (showImages && job.image) {
         return `
         <button style="cursor:pointer;border:0;padding:0;background:transparent;box-shadow:none;font:inherit;display:flex;${tileWidth}" class="job-image-container" data-entity-id="${job.entityId}" data-job-name="${job.name}" title="${job.name}">
-          <img src="${job.image}" alt="${job.name}" style="width:${imgWidth};max-width:${imgMaxWidth};height:auto;aspect-ratio:${imgAspectRatio};object-fit:cover;display:block;border-radius:10px;" onerror="this.style.display='none'" />
+          <img src="${job.image}" alt="${job.name}" style="width:${imgWidth};max-width:${imgMaxWidth};height:auto;max-height:${imgMaxHeight};object-fit:${imgFit};display:block;border-radius:10px;" onerror="this.style.display='none'" />
         </button>
       `;
       }
