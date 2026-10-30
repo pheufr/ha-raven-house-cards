@@ -815,6 +815,8 @@
       this._mediaCacheTtlMs = 60 * 60 * 1e3;
       this._lastRenderKey = "";
       this._confirmNewQuiz = false;
+      this._jokersUsed = /* @__PURE__ */ new Set();
+      this._jokerRoundKey = "";
     }
     setConfig(config) {
       this._config = config || {};
@@ -842,6 +844,8 @@
       return `${Math.max(minimumPx, scaled)}px`;
     }
     connectedCallback() {
+      if (this._clickBound) return;
+      this._clickBound = true;
       this.addEventListener("click", (e) => this._handleClick(e));
     }
     _buildRenderKey() {
@@ -887,6 +891,14 @@
     }
     _call(service, data = {}) {
       return this._hass.callService("raven_house_tools", service, data);
+    }
+    _syncJokers() {
+      const attrs = this._hass.states["sensor.rh_quiz_rounds"]?.attributes || {};
+      const key = `${attrs.active_round_index ?? ""}:${attrs.round_position_index ?? ""}`;
+      if (key !== this._jokerRoundKey) {
+        this._jokerRoundKey = key;
+        this._jokersUsed.clear();
+      }
     }
     _hasActiveRound() {
       const value = this._hass.states["sensor.rh_quiz_rounds"]?.attributes?.active_round_index;
@@ -994,6 +1006,7 @@
            <div style="font-size:${this._scaledPx(12, 10)};opacity:0.75;">Total Points: <strong>${player.total}</strong></div>
          </div>`;
       const photoSize = compact ? 18 : 24;
+      const jokerUsed = this._jokersUsed.has(player.entityId);
       return `
       <div style="padding:${compact ? "7px" : "9px"} 0;display:grid;gap:${compact ? "5px" : "8px"};${player.enabled ? "" : "opacity:0.45;"}">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;">
@@ -1005,7 +1018,7 @@
         </div>
         <div style="display:flex;gap:${compact ? "4px" : "6px"};flex-wrap:wrap;">
           ${actionButtons}
-          <button data-action="joker" data-entity="${player.entityId}" style="${this._buttonStyle(true, compact)}">Joker</button>
+          <button data-action="joker" data-entity="${player.entityId}" ${jokerUsed ? "disabled" : ""} style="${this._buttonStyle(true, compact)}${jokerUsed ? ";opacity:0.4;cursor:default" : ""}">Joker</button>
         </div>
       </div>
     `;
@@ -1022,6 +1035,7 @@
     _render() {
       if (!this._hass) return;
       const compact = Boolean(this._config.compact);
+      this._syncJokers();
       const players = this._players();
       const hasActiveRound = this._hasActiveRound();
       const roundAction = hasActiveRound ? "end-round" : "start-round";
@@ -1032,6 +1046,7 @@
           ${this._confirmNewQuiz ? this._renderNewQuizConfirm() : `
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
             <button data-action="${roundAction}" style="${this._buttonStyle()}">${roundActionLabel}</button>
+            ${hasActiveRound ? `<button data-action="save-round" style="${this._buttonStyle()}">Save</button>` : ""}
             <button data-action="new-quiz" style="${this._buttonStyle(true)}">Start New Quiz</button>
           </div>`}
           <div style="font-size:${this._scaledPx(compact ? 12 : 14, 10)};">
@@ -1048,6 +1063,10 @@
       const entityId = button.dataset.entity;
       if (action === "end-round") {
         this._call("end_round");
+        return;
+      }
+      if (action === "save-round") {
+        this._call("end_round").then(() => this._call("start_round"));
         return;
       }
       if (action === "start-round") {
@@ -1078,7 +1097,15 @@
         return;
       }
       if (action === "joker") {
-        this._call("use_joker", { entity_id: entityId });
+        if (this._jokersUsed.has(entityId)) return;
+        const current = this._players().find((p) => p.entityId === entityId)?.round || 0;
+        if (!current) return;
+        this._jokersUsed.add(entityId);
+        this._render();
+        this._call(current > 0 ? "add_points" : "remove_points", {
+          entity_id: entityId,
+          points: Math.abs(current)
+        });
       }
     }
     getCardSize() {

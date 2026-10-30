@@ -6,6 +6,8 @@ class RHQuizMasterCard extends HTMLElement {
     this._mediaCacheTtlMs = 60 * 60 * 1000;
     this._lastRenderKey = "";
     this._confirmNewQuiz = false;
+    this._jokersUsed = new Set();
+    this._jokerRoundKey = "";
   }
 
   setConfig(config) {
@@ -41,6 +43,8 @@ class RHQuizMasterCard extends HTMLElement {
   }
 
   connectedCallback() {
+    if (this._clickBound) return;
+    this._clickBound = true;
     this.addEventListener("click", (e) => this._handleClick(e));
   }
 
@@ -95,6 +99,15 @@ class RHQuizMasterCard extends HTMLElement {
 
   _call(service, data = {}) {
     return this._hass.callService("raven_house_tools", service, data);
+  }
+
+  _syncJokers() {
+    const attrs = this._hass.states["sensor.rh_quiz_rounds"]?.attributes || {};
+    const key = `${attrs.active_round_index ?? ""}:${attrs.round_position_index ?? ""}`;
+    if (key !== this._jokerRoundKey) {
+      this._jokerRoundKey = key;
+      this._jokersUsed.clear();
+    }
   }
 
   _hasActiveRound() {
@@ -222,6 +235,7 @@ class RHQuizMasterCard extends HTMLElement {
          </div>`;
 
     const photoSize = compact ? 18 : 24;
+    const jokerUsed = this._jokersUsed.has(player.entityId);
 
     return `
       <div style="padding:${compact ? "7px" : "9px"} 0;display:grid;gap:${compact ? "5px" : "8px"};${player.enabled ? "" : "opacity:0.45;"}">
@@ -234,7 +248,7 @@ class RHQuizMasterCard extends HTMLElement {
         </div>
         <div style="display:flex;gap:${compact ? "4px" : "6px"};flex-wrap:wrap;">
           ${actionButtons}
-          <button data-action="joker" data-entity="${player.entityId}" style="${this._buttonStyle(true, compact)}">Joker</button>
+          <button data-action="joker" data-entity="${player.entityId}" ${jokerUsed ? "disabled" : ""} style="${this._buttonStyle(true, compact)}${jokerUsed ? ";opacity:0.4;cursor:default" : ""}">Joker</button>
         </div>
       </div>
     `;
@@ -253,6 +267,7 @@ class RHQuizMasterCard extends HTMLElement {
   _render() {
     if (!this._hass) return;
     const compact = Boolean(this._config.compact);
+    this._syncJokers();
     const players = this._players();
     const hasActiveRound = this._hasActiveRound();
     const roundAction = hasActiveRound ? "end-round" : "start-round";
@@ -264,6 +279,7 @@ class RHQuizMasterCard extends HTMLElement {
           ${this._confirmNewQuiz ? this._renderNewQuizConfirm() : `
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
             <button data-action="${roundAction}" style="${this._buttonStyle()}">${roundActionLabel}</button>
+            ${hasActiveRound ? `<button data-action="save-round" style="${this._buttonStyle()}">Save</button>` : ""}
             <button data-action="new-quiz" style="${this._buttonStyle(true)}">Start New Quiz</button>
           </div>`}
           <div style="font-size:${this._scaledPx(compact ? 12 : 14, 10)};">
@@ -282,6 +298,11 @@ class RHQuizMasterCard extends HTMLElement {
 
     if (action === "end-round") {
       this._call("end_round");
+      return;
+    }
+
+    if (action === "save-round") {
+      this._call("end_round").then(() => this._call("start_round"));
       return;
     }
 
@@ -318,7 +339,15 @@ class RHQuizMasterCard extends HTMLElement {
     }
 
     if (action === "joker") {
-      this._call("use_joker", { entity_id: entityId });
+      if (this._jokersUsed.has(entityId)) return;
+      const current = this._players().find((p) => p.entityId === entityId)?.round || 0;
+      if (!current) return;
+      this._jokersUsed.add(entityId);
+      this._render();
+      this._call(current > 0 ? "add_points" : "remove_points", {
+        entity_id: entityId,
+        points: Math.abs(current),
+      });
     }
   }
 
